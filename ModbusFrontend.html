@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Modbus Control Panel</title>
+  <style>
+    :root {
+      --bg: #1e1e2e; --panel: #2a2a3e; --accent: #89b4fa;
+      --success: #a6e3a1; --error: #f38ba8; --text: #cdd6f4;
+      --border: #45475a; --input: #313244;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--bg); color: var(--text);
+      padding: 20px; line-height: 1.5;
+    }
+    .container { max-width: 1200px; margin: 0 auto; display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; }
+    
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+    }
+    .panel h3 {
+      color: var(--accent); margin-bottom: 12px; padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .form-row label { min-width: 100px; font-size: 0.9em; display: flex; align-items: center; }
+    .form-row input, .form-row select {
+      flex: 1; min-width: 120px; padding: 6px 10px;
+      background: var(--input); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text);
+    }
+    .form-row input[type="number"] { width: 80px; }
+    
+    .btn {
+      padding: 8px 16px; background: var(--accent); color: #111;
+      border: none; border-radius: 4px; cursor: pointer;
+      font-weight: 600; transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-danger { background: var(--error); color: #111; }
+    .btn-success { background: var(--success); color: #111; }
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    
+    .status-bar {
+      padding: 8px 12px; background: var(--input);
+      border-radius: 4px; margin: 10px 0; font-size: 0.9em;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--error); display: inline-block; margin-right: 6px;
+    }
+    .status-dot.active { background: var(--success); }
+    
+    .log {
+      background: #111; border-radius: 4px; padding: 10px;
+      max-height: 300px; overflow-y: auto; font-family: monospace;
+      font-size: 0.85em; white-space: pre-wrap;
+    }
+    .log .error { color: var(--error); }
+    .log .success { color: var(--success); }
+    .log .info { color: #89dceb; }
+    
+    .hidden { display: none !important; }
+    
+    table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+    th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--accent); }
+    
+    .tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .tab { padding: 6px 12px; cursor: pointer; border-radius: 4px 4px 0 0; }
+    .tab.active { background: var(--accent); color: #111; font-weight: 600; }
+    
+    @media (max-width: 768px) {
+      .container { grid-template-columns: 1fr; }
+    }
+    /* Цвета для access-флагов */
+.success { color: var(--success); font-weight: 600; }
+.error { color: var(--error); font-weight: 600; }
+.info { color: #89dceb; font-weight: 600; }
+
+/* Таблица регистров */
+#registersTable code {
+  background: var(--input); padding: 2px 6px; border-radius: 3px;
+  font-family: monospace; font-size: 0.9em;
+}
+#registersTable td { vertical-align: middle; }
+#registersTable button { margin: 2px 0; }
+
+/* Адаптив для таблицы */
+@media (max-width: 1200px) {
+  #registersTable { font-size: 0.85em; }
+  #registersTable th:nth-child(6),
+  #registersTable td:nth-child(6),
+  #registersTable th:nth-child(7),
+  #registersTable td:nth-child(7) { display: none; }
+}
+#registersTable td.success {
+  background: rgba(166, 227, 161, 0.2);
+  transition: background 0.5s;
+}
+
+/* Ошибки чтения */
+#registersTable td .error {
+  color: var(--error);
+  font-weight: 600;
+}
+
+/* Прогресс-бар */
+#progressBar {
+  background: linear-gradient(90deg, var(--accent), #b4befe);
+  box-shadow: 0 0 10px rgba(137, 180, 250, 0.5);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+#readProgress:not(.hidden) #progressText {
+  animation: pulse 1.5s infinite;
+}
+  </style>
+</head>
+<body>
+
+<h2 style="text-align:center; color:var(--accent); margin-bottom:20px;">⚙️ Modbus Control Panel</h2>
+
+<div class="container">
+
+  <!-- 🔌 Transport Panel -->
+  <div class="panel">
+    <h3>🔌 Транспорт</h3>
+    
+    <div class="status-bar">
+      <span><span class="status-dot" id="statusDot"></span><span id="statusText">Disconnected</span></span>
+      <button class="btn" id="refreshStatusBtn">🔄 Refresh</button>
+    </div>
+    
+    <div class="tabs">
+      <div class="tab active" data-type="tcp">TCP</div>
+      <div class="tab" data-type="rtu">RTU</div>
+    </div>
+    
+    <!-- TCP Settings -->
+    <div id="tcpSettings">
+      <div class="form-row">
+        <label>Host:</label>
+        <input type="text" id="tcpHost" value="127.0.0.1"/>
+      </div>
+      <div class="form-row">
+        <label>Port:</label>
+        <input type="number" id="tcpPort" value="502" min="1" max="65535"/>
+      </div>
+    </div>
+    
+    <!-- RTU Settings -->
+    <div id="rtuSettings" class="hidden">
+      <div class="form-row">
+        <label>Port:</label>
+        <input type="text" id="rtuPort" value="/dev/ttyUSB0"/>
+      </div>
+      <div class="form-row">
+        <label>Baud:</label>
+        <select id="rtuBaud">
+          <option value="9600">9600</option>
+          <option value="19200">19200</option>
+          <option value="38400" selected>38400</option>
+          <option value="57600">57600</option>
+          <option value="115200">115200</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Stop Bits:</label>
+        <select id="rtuStopBits">
+          <option value="1" selected>1</option>
+          <option value="2">2</option>
+        </select>
+      </div>
+    </div>
+    
+    <div class="btn-group">
+      <button class="btn btn-success" id="openBtn">🔗 Open</button>
+      <button class="btn btn-danger" id="closeBtn">✖ Close</button>
+      <button class="btn" id="switchBtn">🔁 Switch</button>
+    </div>
+    
+    <div class="log" id="transportLog"></div>
+  </div>
+
+  <!-- 📖 Modbus Read Panel -->
+  <div class="panel">
+    <h3>📖 Чтение регистров</h3>
+    
+    <div class="form-row">
+      <label>Slave ID:</label>
+      <input type="number" id="readSlave" value="1" min="1" max="247"/>
+    </div>
+    <div class="form-row">
+      <label>Address:</label>
+      <input type="number" id="readAddress" value="0" min="0"/>
+    </div>
+    <div class="form-row">
+      <label>Count:</label>
+      <input type="number" id="readCount" value="10" min="1" max="125"/>
+    </div>
+    <div class="form-row">
+      <label><input type="checkbox" id="readInput"/> Input Registers</label>
+    </div>
+    
+    <div class="btn-group">
+      <button class="btn" id="readSingleBtn">📥 Read</button>
+      <button class="btn" id="readBatchBtn">📦 Batch Read</button>
+    </div>
+    
+    <div style="margin-top:12px;">
+      <small style="color:#9399b2;">Добавить в batch:</small>
+      <table id="batchReadTable">
+        <thead><tr><th>Slave</th><th>Addr</th><th>Count</th><th>In</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button class="btn" id="addBatchReadBtn" style="margin-top:8px;">+ Добавить</button>
+    </div>
+    
+    <div class="log" id="readLog"></div>
+  </div>
+
+  <!-- ✍️ Modbus Write Panel -->
+  <div class="panel">
+    <h3>✍️ Запись регистров</h3>
+    
+    <div class="form-row">
+      <label>Slave ID:</label>
+      <input type="number" id="writeSlave" value="1" min="1" max="247"/>
+    </div>
+    <div class="form-row">
+      <label>Address:</label>
+      <input type="number" id="writeAddress" value="0" min="0"/>
+    </div>
+    <div class="form-row">
+      <label>Value(s):</label>
+      <input type="text" id="writeValues" placeholder="1234 или 100,200,300"/>
+    </div>
+    
+    <div class="btn-group">
+      <button class="btn btn-success" id="writeBtn">✍️ Write</button>
+      <button class="btn" id="writeBatchBtn">📦 Batch Write</button>
+    </div>
+    
+    <div style="margin-top:12px;">
+      <small style="color:#9399b2;">Batch записи:</small>
+      <table id="batchWriteTable">
+        <thead><tr><th>Slave</th><th>Addr</th><th>Values</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button class="btn" id="addBatchWriteBtn" style="margin-top:8px;">+ Добавить</button>
+    </div>
+    
+    <div class="log" id="writeLog"></div>
+  </div>
+
+  <!-- 📋 Response Log -->
+  <div class="panel" style="grid-column: 1 / -1;">
+    <h3>📋 Логи ответов</h3>
+    <div class="log" id="responseLog" style="max-height:400px;"></div>
+    <div class="btn-group" style="margin-top:10px;">
+      <button class="btn" id="clearLogBtn">🗑️ Очистить</button>
+      <button class="btn" id="pingBtn">🏓 Ping</button>
+    </div>
+  </div>
+  <!-- 🗂️ Register Import Panel -->
+<div class="panel" style="grid-column: 1 / -1;">
+  <h3>🗂️ Регистры (CSV импорт)</h3>
+  
+  <div class="form-row">
+  <label>Файл:</label>
+  <input type="file" id="csvFile" accept=".csv,.txt"/>
+  <button class="btn" id="importBtn">📥 Загрузить</button>
+  <button class="btn btn-danger" id="clearRegistersBtn">🗑️ Очистить</button>
+  <!-- НОВАЯ КНОПКА -->
+  <button class="btn btn-success" id="readAllBtn" disabled>📡 Читать все</button>
+  <button class="btn" id="showStatsBtn">📊 Статистика</button>
+</div>
+
+<!-- Прогресс-бар (добавить под таблицей) -->
+<div id="readProgress" class="hidden" style="margin-top:10px;">
+  <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.9em;">
+    <span id="progressText">Чтение регистров...</span>
+    <span id="progressPercent">0%</span>
+  </div>
+  <div style="background:var(--input); border-radius:4px; height:8px; overflow:hidden;">
+    <div id="progressBar" style="background:var(--accent); height:100%; width:0%; transition:width 0.2s;"></div>
+  </div>
+</div>
+  
+  <div class="form-row">
+    <label>Фильтр:</label>
+    <input type="text" id="registerFilter" placeholder="Поиск по адресу или описанию..."/>
+    <label>Только RWE:</label>
+    <input type="checkbox" id="filterRwe"/>
+    <label>Slave ID:</label>
+    <input type="number" id="filterSlave" value="1" min="1" max="247" style="width:70px"/>
+  </div>
+  
+  <div style="overflow-x:auto; margin-top:10px;">
+    <table id="registersTable">
+      <thead>
+        <tr>
+          <th>Addr</th>
+          <th>Mnemonic</th>
+          <th>Access</th>
+          <th>Count</th>
+          <th>Type</th>
+          <th>Min</th>
+          <th>Max</th>
+          <th>Description</th>
+          <th>Value</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="registersBody">
+        <tr><td colspan="10" style="text-align:center; color:#9399b2;">Загрузите CSV файл для отображения регистров</td></tr>
+      </tbody>
+    </table>
+  </div>
+  
+  <div class="log" id="importLog" style="max-height:150px;"></div>
+</div>
+</div>
+
+<script>
+// ==================== CONFIG ====================
+const API_URL = 'http://127.0.0.1:8001/'; // ← измените при необходимости
+
+// ==================== UTILS ====================
+const $ = id => document.getElementById(id);
+const log = (elId, msg, type='info') => {
+  const el = $(elId);
+  const time = new Date().toLocaleTimeString();
+  el.innerHTML += `<div class="${type}">[${time}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+};
+const clearLog = elId => $(elId).innerHTML = '';
+
+const sendRpc = async (method, params = {}) => {
+  const payload = { jsonrpc: '2.0', method, params, id: Date.now() };
+  log('responseLog', `→ ${method}`, 'info');
+  
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    const json = await res.json();
+    
+    if (json.error) {
+      log('responseLog', `✗ ${json.error.code}: ${json.error.message}`, 'error');
+      return { error: json.error };
+    }
+    
+    log('responseLog', `✓ ${method}: ${JSON.stringify(json.result)}`, 'success');
+    return { result: json.result };
+  } catch (e) {
+    log('responseLog', `✗ Network error: ${e.message}`, 'error');
+    return { error: { code: -1, message: e.message } };
+  }
+};
+
+// ==================== TRANSPORT ====================
+let currentType = 'tcp';
+
+const updateTransportUI = (status) => {
+  const dot = $('statusDot');
+  const text = $('statusText');
+  
+  if (status?.active) {
+    dot.classList.add('active');
+    text.textContent = `${status.type?.toUpperCase()} @ ${status.host || status.serial_port}:${status.port || status.baud_rate}`;
+  } else {
+    dot.classList.remove('active');
+    text.textContent = 'Disconnected';
+  }
+};
+
+const refreshStatus = async () => {
+  const { result } = await sendRpc('transport.status');
+  if (result) updateTransportUI(result);
+};
+
+$('refreshStatusBtn').onclick = refreshStatus;
+
+// Tabs
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentType = tab.dataset.type;
+    $('tcpSettings').classList.toggle('hidden', currentType !== 'tcp');
+    $('rtuSettings').classList.toggle('hidden', currentType !== 'rtu');
+  };
+});
+
+// Open
+$('openBtn').onclick = async () => {
+  const params = { type: currentType };
+  if (currentType === 'tcp') {
+    params.host = $('tcpHost').value;
+    params.port = parseInt($('tcpPort').value);
+  } else {
+    params.serial_port = $('rtuPort').value;
+    params.baud_rate = parseInt($('rtuBaud').value);
+    params.stop_bits = parseInt($('rtuStopBits').value);
+  }
+  const { result } = await sendRpc('transport.open', params);
+  if (result) {
+    log('transportLog', `✓ Opened ${currentType}`, 'success');
+    refreshStatus();
+  }
+};
+
+// Close
+$('closeBtn').onclick = async () => {
+  const { result } = await sendRpc('transport.close');
+  if (result) {
+    log('transportLog', '✓ Closed', 'success');
+    updateTransportUI({ active: false });
+  }
+};
+
+// Switch
+$('switchBtn').onclick = async () => {
+  const params = { type: currentType };
+  if (currentType === 'tcp') {
+    params.host = $('tcpHost').value;
+    params.port = parseInt($('tcpPort').value);
+  } else {
+    params.serial_port = $('rtuPort').value;
+    params.baud_rate = parseInt($('rtuBaud').value);
+    params.stop_bits = parseInt($('rtuStopBits').value);
+  }
+  const { result } = await sendRpc('transport.switch', params);
+  if (result) {
+    log('transportLog', `✓ Switched to ${currentType}`, 'success');
+    refreshStatus();
+  }
+};
+
+// ==================== READ ====================
+const doRead = async () => {
+  const params = {
+    slave_id: parseInt($('readSlave').value),
+    address: parseInt($('readAddress').value),
+    count: parseInt($('readCount').value),
+    input: $('readInput').checked
+  };
+  const { result, error } = await sendRpc('modbus.read', params);
+  if (result) log('readLog', `✓ Accepted: ${JSON.stringify(result)}`, 'success');
+  if (error) log('readLog', `✗ ${error.message}`, 'error');
+};
+
+$('readSingleBtn').onclick = doRead;
+
+// Batch read
+const batchReadItems = [];
+
+$('addBatchReadBtn').onclick = () => {
+  const item = {
+    slave_id: parseInt($('readSlave').value),
+    address: parseInt($('readAddress').value),
+    count: parseInt($('readCount').value),
+    input: $('readInput').checked
+  };
+  batchReadItems.push(item);
+  
+  const tbody = $('batchReadTable').querySelector('tbody');
+  const row = tbody.insertRow();
+  row.innerHTML = `
+    <td>${item.slave_id}</td>
+    <td>${item.address}</td>
+    <td>${item.count}</td>
+    <td>${item.input ? '✓' : ''}</td>
+    <td><button class="btn btn-danger" style="padding:2px 8px;">✖</button></td>
+  `;
+  row.querySelector('button').onclick = () => {
+    const idx = Array.from(tbody.rows).indexOf(row);
+    batchReadItems.splice(idx, 1);
+    row.remove();
+  };
+};
+
+$('readBatchBtn').onclick = async () => {
+  if (batchReadItems.length === 0) {
+    log('readLog', '⚠ Добавьте запросы в batch', 'error');
+    return;
+  }
+  const { result, error } = await sendRpc('modbus.read_group', { requests: batchReadItems });
+  if (result) log('readLog', `✓ Batch accepted: ${result.count} requests`, 'success');
+  if (error) log('readLog', `✗ ${error.message}`, 'error');
+};
+
+// ==================== WRITE ====================
+const doWrite = async () => {
+  const slave_id = parseInt($('writeSlave').value);
+  const address = parseInt($('writeAddress').value);
+  const valStr = $('writeValues').value.trim();
+  
+  const values = valStr.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v));
+  if (values.length === 0) {
+    log('writeLog', '⚠ Введите корректные значения', 'error');
+    return;
+  }
+  
+  const params = { slave_id, address };
+  if (values.length === 1) {
+    params.value = values[0];
+  } else {
+    params.values = values;
+  }
+  
+  const { result, error } = await sendRpc('modbus.write', params);
+  if (result) log('writeLog', '✓ Write accepted', 'success');
+  if (error) log('writeLog', `✗ ${error.message}`, 'error');
+};
+
+$('writeBtn').onclick = doWrite;
+
+// Batch write
+const batchWriteItems = [];
+
+$('addBatchWriteBtn').onclick = () => {
+  const slave_id = parseInt($('writeSlave').value);
+  const address = parseInt($('writeAddress').value);
+  const valStr = $('writeValues').value.trim();
+  const values = valStr.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v));
+  
+  if (values.length === 0) return;
+  
+  const item = { slave_id, address };
+  if (values.length === 1) {
+    item.value = values[0];
+  } else {
+    item.values = values;
+  }
+  batchWriteItems.push(item);
+  
+  const tbody = $('batchWriteTable').querySelector('tbody');
+  const row = tbody.insertRow();
+  row.innerHTML = `
+    <td>${item.slave_id}</td>
+    <td>${item.address}</td>
+    <td>${values.join(',')}</td>
+    <td><button class="btn btn-danger" style="padding:2px 8px;">✖</button></td>
+  `;
+  row.querySelector('button').onclick = () => {
+    const idx = Array.from(tbody.rows).indexOf(row);
+    batchWriteItems.splice(idx, 1);
+    row.remove();
+  };
+};
+
+$('writeBatchBtn').onclick = async () => {
+  if (batchWriteItems.length === 0) {
+    log('writeLog', '⚠ Добавьте запросы в batch', 'error');
+    return;
+  }
+  const { result, error } = await sendRpc('modbus.write_group', { requests: batchWriteItems });
+  if (result) log('writeLog', `✓ Batch accepted: ${result.count} requests`, 'success');
+  if (error) log('writeLog', `✗ ${error.message}`, 'error');
+};
+
+// ==================== GLOBAL ====================
+$('pingBtn').onclick = () => sendRpc('ping');
+$('clearLogBtn').onclick = () => clearLog('responseLog');
+
+// Init
+$('responseLog').innerHTML = `<div class="info">[System] Ready. Connect to ${API_URL}</div>`;
+refreshStatus();
+
+// Auto-refresh status every 30s
+setInterval(refreshStatus, 30000);
+// ==================== REGISTERS ====================
+let registers = []; // {addr, mnemonic, access, count, type, min, max, description, value}
+
+// Парсинг CSV в формате пользователя
+// Парсинг CSV в формате:
+// HREG=48;Register=100;Red.=24;RWE=32;Bytes=28;Type=40;Min=32;Max=32;Description=200;S=16;Value=400
+// 0xF000;HREG_slaveID;A.;RWE;2;Word;1;247;Сетевой адрес;;247
+
+const parseRegisterCsv = (text) => {
+  const lines = text.trim().split('\n');
+  const result = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    
+    // Пропускаем пустые строки и строки-разделители
+    if (!line || line.startsWith(';;;;;;;;;;')) continue;
+    
+    // Пропускаем строку-заголовок схемы (содержит "HREG=")
+    if (line.startsWith('HREG=')) continue;
+    
+    const parts = line.split(';').map(p => p.trim());
+    
+    // Ожидаем 11 полей: Addr;Mnemonic;Flag;Access;Count;Type;Min;Max;Description;Extra;Value
+    if (parts.length < 9) continue;
+    
+    // Парсим адрес (может быть 0xF000 или десятичный)
+    let addrStr = parts[0];
+    const addrNum = addrStr.startsWith('0x') || addrStr.startsWith('0X') 
+      ? parseInt(addrStr, 16) 
+      : parseInt(addrStr);
+    
+    if (isNaN(addrNum)) {
+      console.warn(`[CSV] Пропущена строка ${i+1}: неверный адрес "${addrStr}"`);
+      continue;
+    }
+    
+    // Парсим числовые поля с обработкой ошибок
+    const parseNum = (val, def = null) => {
+      if (val === '' || val === undefined) return def;
+      const num = val.includes('.') ? parseFloat(val) : parseInt(val);
+      return isNaN(num) ? def : num;
+    };
+    
+    const reg = {
+      addr: addrNum,
+      addrHex: '0x' + addrNum.toString(16).toUpperCase().padStart(4, '0'),
+      mnemonic: parts[1] || '',
+      flag: parts[2] || '',           // A., F., b., P., t., U., d. и т.д.
+      access: parts[3] || '',         // R, W, RW, RWE
+      count: parseNum(parts[4], 1),   // количество регистров
+      type: parts[5] || 'Word',       // Word, Byte, Int8, Int16, Int32, Float, String, TCP56, Array
+      min: parseNum(parts[6]),
+      max: parseNum(parts[7]),
+      description: parts[8] || '',
+      extra: parts[9] || '',          // доп. поле (часто пустое)
+      value: parseNum(parts[10]),     // значение по умолчанию / текущее
+      writable: (parts[3] || '').includes('W')
+    };
+    
+    result.push(reg);
+  }
+  
+  // Сортировка по адресу
+  return result.sort((a, b) => a.addr - b.addr);
+};
+
+// Отображение таблицы регистров
+// Отображение таблицы регистров
+const renderRegisters = (filterText = '') => {
+  const tbody = $('registersBody');
+  const filter = filterText.toLowerCase();
+  const onlyRwe = $('filterRwe').checked;
+  const slaveId = parseInt($('filterSlave').value) || 1;
+  
+  const filtered = registers.filter(r => {
+    if (onlyRwe && !r.access.includes('W')) return false;
+    if (filter && !r.addrHex.toLowerCase().includes(filter) && 
+                  !r.mnemonic.toLowerCase().includes(filter) &&
+                  !r.description.toLowerCase().includes(filter)) return false;
+    return true;
+  });
+  
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center; color:#9399b2;">Нет регистров для отображения</td></tr>';
+    return;
+  }
+  
+  // Форматирование значения с учётом типа
+  const formatValue = (reg) => {
+    if (reg.value === null) return '<span style="color:#6c7086">—</span>';
+    if (reg.type === 'String') return `"${reg.value}"`;
+    if (reg.type === 'Float') return parseFloat(reg.value).toFixed(2);
+    if (reg.type === 'TCP56') return formatCP56(reg.value); // см. ниже
+    return reg.value;
+  };
+  
+  // Форматирование CP56 (упрощённо)
+  const formatCP56 = (val) => {
+    if (!val || typeof val !== 'number') return '—';
+    // CP56: 7 байт, BCD-кодирование даты/времени
+    // Для простоты пока выводим как есть
+    return `0x${val.toString(16).toUpperCase()}`;
+  };
+  
+  tbody.innerHTML = filtered.map(r => {
+    const accessClass = r.access.includes('E') ? 'success' : 
+                       (r.access.includes('W') ? 'info' : 'error');
+    const flagBadge = r.flag ? `<span style="background:var(--input);padding:2px 4px;border-radius:3px;font-size:0.8em;">${r.flag}</span>` : '';
+    
+    return `
+      <tr>
+        <td><code>${r.addrHex}</code></td>
+        <td>${r.mnemonic} ${flagBadge}</td>
+        <td><span class="${accessClass}" style="padding:2px 6px;border-radius:3px;font-size:0.85em;">${r.access}</span></td>
+        <td>${r.count}</td>
+        <td>${r.type}</td>
+        <td>${r.min ?? '—'}</td>
+        <td>${r.max ?? '—'}</td>
+        <td title="${r.description}">${r.description.substring(0, 25)}${r.description.length > 25 ? '...' : ''}</td>
+        <td id="val-${r.addr}">${formatValue(r)}</td>
+        <td>
+          ${r.writable ? `<button class="btn" style="padding:4px 8px;" onclick="editRegister(${r.addr}, ${slaveId}, '${r.type}')">✏️</button>` : ''}
+          <button class="btn" style="padding:4px 8px;" onclick="readRegister(${r.addr}, ${r.count}, ${slaveId}, '${r.type}')">📥</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+};
+
+// Чтение значения регистра
+window.readRegister = async (addr, count, slaveId, type) => {
+  log('importLog', `📥 Reading 0x${addr.toString(16).toUpperCase()} (${count} regs)...`, 'info');
+  
+  const { result, error } = await sendRpc('modbus.read', {
+    slave_id: slaveId,
+    address: addr,
+    count: count,
+    input: false
+  });
+  
+  if (error) {
+    log('importLog', `✗ ${error.message}`, 'error');
+    const el = $(`val-${addr}`);
+    if (el) el.innerHTML = `<span class="error">ERR</span>`;
+    return;
+  }
+  
+  // ✅ Извлекаем значения из ответа бэкенда
+  const values = result?.values || [];
+  if (values.length === 0) {
+    log('importLog', `⚠ Пустой ответ`, 'error');
+    return;
+  }
+  
+  // Конвертируем в зависимости от типа
+  const parsedValue = convertModbusValues(values, type);
+  
+  // Обновляем в таблице и в массиве registers
+  const reg = registers.find(r => r.addr === addr);
+  if (reg) reg.value = parsedValue;
+  
+  const el = $(`val-${addr}`);
+  if (el) {
+    el.textContent = formatDisplayValue(parsedValue, type);
+    el.classList.add('success');
+    setTimeout(() => el.classList.remove('success'), 1000);
+  }
+  
+  log('importLog', `✓ 0x${addr.toString(16).toUpperCase()} = ${formatDisplayValue(parsedValue, type)}`, 'success');
+};
+
+// Редактирование значения (для записи)
+// Редактирование значения (для записи)
+// Редактирование значения (для записи)
+window.editRegister = async (addr, slaveId, type) => {
+  const reg = registers.find(r => r.addr === addr);
+  if (!reg) return;
+  
+  let defaultVal = reg.value ?? '';
+  if (type === 'Float' && typeof defaultVal === 'number') {
+    defaultVal = defaultVal.toFixed(2);
+  }
+  
+  const rangeInfo = `Допустимо: ${reg.min ?? '–'} … ${reg.max ?? '–'}`;
+  const newVal = prompt(
+    `Новое значение для ${reg.addrHex} ${reg.mnemonic} (${type})\n${rangeInfo}`,
+    defaultVal
+  );
+  if (newVal === null) return;
+  
+  let parsedVal;
+  if (type === 'String') {
+    parsedVal = newVal;
+  } else if (type === 'Float') {
+    parsedVal = parseFloat(newVal);
+    if (isNaN(parsedVal)) {
+      alert('Введите корректное число');
+      return;
+    }
+  } else {
+    parsedVal = parseInt(newVal);
+    if (isNaN(parsedVal)) {
+      alert('Введите корректное целое число');
+      return;
+    }
+    if (reg.min !== null && parsedVal < reg.min) {
+      alert(`Значение ниже минимума (${reg.min})`);
+      return;
+    }
+    if (reg.max !== null && parsedVal > reg.max) {
+      alert(`Значение выше максимума (${reg.max})`);
+      return;
+    }
+  }
+  
+  log('importLog', `✍️ Writing ${parsedVal} to 0x${addr.toString(16).toUpperCase()}...`, 'info');
+  
+  const { result, error } = await sendRpc('modbus.write', {
+    slave_id: slaveId,
+    address: addr,
+    value: type === 'String' ? parsedVal : (type === 'Float' ? parsedVal : parsedVal)
+  });
+  
+  if (error) {
+    log('importLog', `✗ ${error.message}`, 'error');
+    return;
+  }
+  
+  reg.value = parsedVal;
+  const el = $(`val-${addr}`);
+  if (el) {
+    el.textContent = formatDisplayValue(parsedVal, type);
+    el.classList.add('success');
+    setTimeout(() => el.classList.remove('success'), 1000);
+  }
+  
+  log('importLog', `✓ Write OK`, 'success');
+};
+
+// Обработчики кнопок
+$('importBtn').onclick = () => {
+  const file = $('csvFile').files[0];
+  if (!file) {
+    log('importLog', '⚠ Выберите файл', 'error');
+    return;
+  }
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      registers = parseRegisterCsv(e.target.result);
+      log('importLog', `✓ Загружено ${registers.length} регистров`, 'success');
+      renderRegisters();
+      
+      // Включаем кнопку "Читать все"
+      const readAllBtn = $('readAllBtn');
+      if (readAllBtn) {
+        readAllBtn.disabled = registers.length === 0;
+        readAllBtn.textContent = registers.length > 0 
+          ? `📡 Читать все (${registers.length})` 
+          : '📡 Читать все';
+      }
+      
+    } catch (err) {
+      log('importLog', `✗ Ошибка парсинга: ${err.message}`, 'error');
+      console.error(err);
+    }
+  };
+  reader.onerror = () => {
+    log('importLog', '✗ Ошибка чтения файла', 'error');
+  };
+  reader.readAsText(file);
+};
+
+$('clearRegistersBtn').onclick = () => {
+  registers = [];
+  $('registersBody').innerHTML = '<tr><td colspan="10" style="text-align:center; color:#9399b2;">Загрузите CSV файл для отображения регистров</td></tr>';
+  log('importLog', '🗑️ Список очищен', 'info');
+};
+
+$('registerFilter').oninput = (e) => renderRegisters(e.target.value);
+$('filterRwe').onchange = () => renderRegisters($('registerFilter').value);
+$('filterSlave').onchange = () => renderRegisters($('registerFilter').value);
+const convertModbusValues = (values, type) => {
+  if (!values || values.length === 0) return null;
+  
+  switch (type) {
+    case 'Word':
+    case 'Byte':
+    case 'Int8':
+    case 'Int16':
+      return values[0];
+    
+    case 'Int32':
+      if (values.length >= 2) {
+        // Little-endian: low word first
+        return (values[1] << 16) | values[0];
+      }
+      return values[0];
+    
+    case 'Float':
+      if (values.length >= 2) {
+        return wordsToFloat(values[0], values[1]);
+      }
+      return null;
+    
+    case 'String':
+      return wordsToString(values);
+    
+    case 'TCP56':
+      return formatCP56(values);
+    
+    case 'Array':
+      return values;
+    
+    default:
+      return values[0];
+  }
+};
+
+// Word → Float (IEEE 754, little-endian)
+const wordsToFloat = (low, high) => {
+  const buffer = new ArrayBuffer(4);
+  const view = new DataView(buffer);
+  view.setUint16(0, low, true);   // low word, little-endian
+  view.setUint16(2, high, true);  // high word, little-endian
+  return view.getFloat32(0, true);
+};
+
+// Word[] → String (каждый Word = 2 символа ASCII)
+const wordsToString = (values) => {
+  let str = '';
+  for (const word of values) {
+    if (word === 0) break;
+    str += String.fromCharCode(word & 0xFF);
+    str += String.fromCharCode((word >> 8) & 0xFF);
+  }
+  return str.trim();
+};
+
+// CP56 Time (7 байт = 4 Word, упрощённо)
+const formatCP56 = (values) => {
+  if (values.length < 4) return '—';
+  // Упрощённое отображение как hex
+  return values.map(v => '0x' + v.toString(16).toUpperCase().padStart(4, '0')).join(' ');
+};
+
+// Форматирование для отображения в таблице
+const formatDisplayValue = (value, type) => {
+  if (value === null || value === undefined) return '<span style="color:#6c7086">—</span>';
+  
+  if (type === 'String') {
+    return `"${value}"`;
+  }
+  
+  if (type === 'Float') {
+    return typeof value === 'number' ? value.toFixed(2) : value;
+  }
+  
+  if (type === 'Array') {
+    return Array.isArray(value) ? `[${value.join(', ')}]` : value;
+  }
+  
+  if (type === 'TCP56') {
+    return value;
+  }
+  
+  // Числа
+  if (typeof value === 'number') {
+    // Если большое число — показываем и hex
+    if (value > 255) {
+      return `${value} (0x${value.toString(16).toUpperCase()})`;
+    }
+    return value;
+  }
+  
+  return value;
+};
+// Чтение всех регистров с прогрессом
+
+// ==================== READ ALL REGISTERS ====================
+
+// Чтение всех регистров с прогрессом и реальными данными от бэкенда
+// ==================== READ ALL REGISTERS (SEQUENTIAL FOR RTU) ====================
+
+window.readAllRegisters = async () => {
+  // === 0. Проверка наличия регистров ===
+  if (registers.length === 0) {
+    log('importLog', '⚠ Загрузите CSV с регистрами', 'error');
+    return;
+  }
+  
+  const slaveId = parseInt($('filterSlave').value) || 1;
+  const readAllBtn = $('readAllBtn');
+  const importBtn = $('importBtn');
+  const progressDiv = $('readProgress');
+  const progressBar = $('progressBar');
+  const progressText = $('progressText');
+  const progressPercent = $('progressPercent');
+  
+  // === 1. Определяем тип транспорта для адаптивных настроек ===
+  let isRtu = false;
+  try {
+    const { result } = await sendRpc('transport.status');
+    isRtu = result?.type === 'rtu';
+  } catch (e) {
+    console.warn('[Transport] Could not detect type, assuming RTU');
+    isRtu = true;
+  }
+  
+  // === 2. Адаптивные параметры ===
+  const BATCH_SIZE = 1;  // 🔥 Всегда 1 для надёжности
+  const DELAY_MS = isRtu ? 400 : 150;  // RTU медленнее
+  const REQUEST_TIMEOUT = isRtu ? 30000 : 10000;  // Таймаут запроса
+  
+  // === 3. Блокировка UI ===
+  readAllBtn.disabled = true;
+  if (importBtn) importBtn.disabled = true;
+  progressDiv.classList.remove('hidden');
+  
+  let completed = 0;
+  let success = 0;
+  let failed = 0;
+  const total = registers.length;
+  
+  // === 4. Обновление прогресс-бара ===
+  const updateProgress = () => {
+    const percent = Math.round((completed / total) * 100);
+    progressBar.style.width = percent + '%';
+    progressPercent.textContent = `${percent}% (${success}✓ ${failed}✗)`;
+    progressText.textContent = `Прочитано ${completed} из ${total} регистров...`;
+  };
+  
+  // === 5. Конвертация массива Word в нужное представление ===
+  const convertModbusValues = (values, type) => {
+    if (!values || !Array.isArray(values) || values.length === 0) return null;
+    
+    switch (type) {
+      case 'Word':
+      case 'Byte':
+      case 'Int8':
+      case 'Int16':
+        return values[0];
+      
+      case 'Int32':
+        if (values.length >= 2) {
+          // Little-endian: low word first
+          return (values[1] << 16) | values[0];
+        }
+        return values[0];
+      
+      case 'Float':
+        if (values.length >= 2) {
+          return wordsToFloat(values[0], values[1]);
+        }
+        return null;
+      
+      case 'String':
+        return wordsToString(values);
+      
+      case 'TCP56':
+        return formatCP56(values);
+      
+      case 'Array':
+        return values;
+      
+      default:
+        return values[0];
+    }
+  };
+  
+  // Word → Float (IEEE 754, little-endian)
+  const wordsToFloat = (low, high) => {
+    const buffer = new ArrayBuffer(4);
+    const view = new DataView(buffer);
+    view.setUint16(0, low, true);
+    view.setUint16(2, high, true);
+    return view.getFloat32(0, true);
+  };
+  
+  // Word[] → String (каждый Word = 2 символа ASCII)
+  const wordsToString = (values) => {
+    let str = '';
+    for (const word of values) {
+      if (word === 0) break;
+      str += String.fromCharCode(word & 0xFF);
+      str += String.fromCharCode((word >> 8) & 0xFF);
+    }
+    return str.trim();
+  };
+  
+  // CP56 Time (упрощённо)
+  const formatCP56 = (values) => {
+    if (!values || values.length < 4) return '—';
+    return values.map(v => '0x' + v.toString(16).toUpperCase().padStart(4, '0')).join(' ');
+  };
+  
+  // Форматирование для отображения в таблице
+  const formatDisplayValue = (value, type) => {
+    if (value === null || value === undefined) return '<span style="color:#6c7086">—</span>';
+    if (type === 'String') return `"${value}"`;
+    if (type === 'Float' && typeof value === 'number') return value.toFixed(2);
+    if (type === 'Array' && Array.isArray(value)) return `[${value.join(', ')}]`;
+    if (type === 'TCP56') return value;
+    if (typeof value === 'number' && value > 255) {
+      return `${value} (0x${value.toString(16).toUpperCase()})`;
+    }
+    return value;
+  };
+  
+  // === 6. Чтение ОДНОГО регистра (последовательно) ===
+  const readSingle = async (reg) => {
+    // Пропускаем, если не соответствует фильтру
+    const filter = $('registerFilter').value.toLowerCase();
+    const onlyRwe = $('filterRwe').checked;
+    
+    if (onlyRwe && !reg.access.includes('W')) return true;
+    if (filter && !reg.addrHex.toLowerCase().includes(filter) && 
+                  !reg.mnemonic.toLowerCase().includes(filter) &&
+                  !reg.description.toLowerCase().includes(filter)) return true;
+    
+    try {
+      // 🔥 Динамический таймаут для fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      
+      const payload = {
+        jsonrpc: '2.0',
+        method: 'modbus.read',
+        params: {
+          slave_id: slaveId,
+          address: reg.addr,
+          count: reg.count,
+          input: false
+        },
+        id: Date.now() + Math.random()
+      };
+      
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      
+      const json = await res.json();
+      
+      // Обработка ошибки Modbus
+      if (json.error) {
+        failed++;
+        const el = $(`val-${reg.addr}`);
+        if (el) {
+          // Разные индикаторы для разных ошибок
+          if (json.error.code === -32000 && json.error.data === 2) {
+            el.innerHTML = `<span style="color:#6c7086">N/A</span>`; // Адрес недоступен
+          } else {
+            el.innerHTML = `<span class="error">ERR</span>`;
+          }
+        }
+        console.warn(`[Read] ${reg.addrHex} (${reg.mnemonic}): ${json.error.message}`);
+        return false;
+      }
+      
+      // Извлечение значений из ответа
+      const values = json.result?.values;
+      if (!Array.isArray(values) || values.length === 0) {
+        failed++;
+        const el = $(`val-${reg.addr}`);
+        if (el) el.innerHTML = `<span style="color:#6c7086">EMPTY</span>`;
+        return false;
+      }
+      
+      // Конвертация по типу
+      const parsedValue = convertModbusValues(values, reg.type);
+      reg.value = parsedValue;
+      
+      // Обновление ячейки в таблице
+      const el = $(`val-${reg.addr}`);
+      if (el) {
+        el.textContent = formatDisplayValue(parsedValue, reg.type);
+        el.classList.add('success');
+        setTimeout(() => el.classList.remove('success'), 300);
+      }
+      
+      // 🔥 Успех: значение не null ИЛИ тип String
+      if (parsedValue !== null || reg.type === 'String') {
+        success++;
+      } else {
+        failed++;
+      }
+      
+      return true;
+      
+    } catch (e) {
+      failed++;
+      console.error(`[Read] ${reg.addrHex}: ${e.message}`);
+      const el = $(`val-${reg.addr}`);
+      if (el) el.innerHTML = `<span style="color:#f38ba8">TO</span>`; // TO = timeout
+      return false;
+    }
+  };
+  
+  // === 7. Старт ===
+  log('importLog', `📡 Запуск ПОСЛЕДОВАТЕЛЬНОГО чтения ${total} регистров (${isRtu ? 'RTU' : 'TCP'}, slave=${slaveId})...`, 'info');
+  const startTime = Date.now();
+  
+  // === 8. ПОСЛЕДОВАТЕЛЬНОЕ чтение (ключевое отличие!) ===
+  for (let i = 0; i < total; i++) {
+    const reg = registers[i];
+    
+    // Читаем и ЖДЁМ завершения
+    await readSingle(reg);
+    
+    // Обновляем прогресс
+    completed++;
+    updateProgress();
+    
+    // 🔥 Пауза между запросами для стабильности RTU
+    if (i < total - 1) {  // Не ждать после последнего
+      await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+    }
+  }
+  
+  // === 9. Завершение ===
+  const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+  const successRate = total > 0 ? Math.round((success / total) * 100) : 0;
+  
+  log('importLog', `✓ Чтение завершено за ${duration}с: ${success}✓ ${failed}✗ из ${total} (${successRate}%)`, 
+      failed > 0 ? 'error' : 'success');
+  
+  // Статистика
+  const stats = `
+📊 Статистика:
+  • Всего регистров: ${total}
+  • Успешно: ${success} (${successRate}%)
+  • Ошибки: ${failed}
+  • Время: ${duration}с
+  • Скорость: ${(total/duration).toFixed(1)} рег/с
+  • Транспорт: ${isRtu ? 'RTU' : 'TCP'}
+  • Slave ID: ${slaveId}`;
+  log('importLog', stats, 'info');
+  
+  // === 10. Разблокировка UI ===
+  readAllBtn.disabled = false;
+  if (importBtn) importBtn.disabled = false;
+  
+  // Скрытие прогресс-бара через 3 секунды
+  setTimeout(() => {
+    progressDiv.classList.add('hidden');
+    progressBar.style.width = '0%';
+  }, 3000);
+};
+
+// === Привязка кнопки ===
+$('readAllBtn').onclick = readAllRegisters;
+$('showStatsBtn').onclick = () => {
+  const withValues = registers.filter(r => r.value !== null);
+  const byType = {};
+  registers.forEach(r => {
+    byType[r.type] = (byType[r.type] || 0) + 1;
+  });
+  
+  const stats = `
+📊 Статистика регистров:
+  • Всего: ${registers.length}
+  • С значениями: ${withValues.length} (${Math.round(withValues.length/registers.length*100)}%)
+  • Без значений: ${registers.length - withValues.length}
+  
+📋 По типам:
+${Object.entries(byType).map(([type, count]) => `  • ${type}: ${count}`).join('\n')}
+  
+💾 Примеры значений:
+${withValues.slice(0, 10).map(r => `  • ${r.addrHex} ${r.mnemonic}: ${r.value}`).join('\n')}
+`;
+  
+  log('importLog', stats, 'info');
+};
+</script>
+
+</body>
+</html>
