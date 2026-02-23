@@ -413,43 +413,65 @@ void HttpJsonServer::handleSession(tcp::socket socket) {
     http::request<http::string_body> req;
     boost::system::error_code ec;
 
+    // 1. Читаем запрос
     http::read(socket, buffer, req, ec);
     if (ec) {
         return;
     }
 
+    // 2. Готовим базовый ответ
     http::response<http::string_body> res;
     res.version(req.version());
     res.keep_alive(false);
     res.set(http::field::content_type, "application/json");
-
-    if (req.method() != http::verb::post) {
-        res.result(http::status::method_not_allowed);
-        res.body() = R"({"error":"Only POST is supported"})";
+    
+    // 3. 🔥 CORS-заголовки — должны быть в КАЖДОМ ответе
+    res.set(http::field::access_control_allow_origin, "*");
+    res.set(http::field::access_control_allow_methods, "POST, OPTIONS, GET");
+    res.set(http::field::access_control_allow_headers, "Content-Type, Accept");
+    res.set(http::field::access_control_max_age, "86400");
+    
+    // 4. 🔥 Обработка preflight OPTIONS — ДО проверки на POST!
+    if (req.method() == http::verb::options) {
+        res.result(http::status::no_content);  // 204 No Content
+        res.body().clear();
         res.prepare_payload();
         http::write(socket, res, ec);
         return;
     }
-
+    
+    // 5. Проверяем метод (только POST для JSON-RPC)
+    if (req.method() != http::verb::post) {
+        res.result(http::status::method_not_allowed);
+        res.body() = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Only POST is supported"}})";
+        res.prepare_payload();
+        http::write(socket, res, ec);
+        return;
+    }
+    
+    // 6. Парсим JSON
     json::value payload;
     try {
         payload = json::parse(req.body());
-    } catch (...) {
+    } catch (const std::exception& e) {
         res.result(http::status::bad_request);
-        res.body() = R"({"error":"Invalid JSON"})";
+        res.body() = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Invalid JSON"}})";
         res.prepare_payload();
         http::write(socket, res, ec);
         return;
     }
-
+    
+    // 7. Обрабатываем запрос через ApiController
     ApiController controller(appCore_);
     const auto response = controller.processRequest(payload);
-
+    
+    // 8. Формируем успешный ответ
     res.result(http::status::ok);
     res.body() = json::serialize(response);
     res.prepare_payload();
     http::write(socket, res, ec);
-
+    
+    // 9. Корректно закрываем соединение
     socket.shutdown(tcp::socket::shutdown_both, ec);
 }
 
