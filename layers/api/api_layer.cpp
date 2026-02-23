@@ -422,34 +422,49 @@ void HttpJsonServer::handleSession(tcp::socket socket) {
     res.version(req.version());
     res.keep_alive(false);
     res.set(http::field::content_type, "application/json");
-
-    if (req.method() != http::verb::post) {
-        res.result(http::status::method_not_allowed);
-        res.body() = R"({"error":"Only POST is supported"})";
+    
+    res.set(http::field::access_control_allow_origin, "*");
+    res.set(http::field::access_control_allow_methods, "POST, OPTIONS, GET");
+    res.set(http::field::access_control_allow_headers, "Content-Type, Accept");
+    res.set(http::field::access_control_max_age, "86400");
+    
+    if (req.method() == http::verb::options) {
+        res.result(http::status::no_content);  // 204 No Content
+        res.body().clear();
         res.prepare_payload();
         http::write(socket, res, ec);
         return;
     }
-
+    
+    if (req.method() != http::verb::post) {
+        res.result(http::status::method_not_allowed);
+        res.body() = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Only POST method is supported"}})";
+        res.prepare_payload();
+        http::write(socket, res, ec);
+        return;
+    }
+    
     json::value payload;
     try {
         payload = json::parse(req.body());
-    } catch (...) {
+    } catch (const std::exception& e) {
         res.result(http::status::bad_request);
-        res.body() = R"({"error":"Invalid JSON"})";
+        // 🔥 Ошибка парсинга в формате JSON-RPC 2.0
+        res.body() = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error: invalid JSON"}})";
         res.prepare_payload();
         http::write(socket, res, ec);
         return;
     }
-
+    
     ApiController controller(appCore_);
     const auto response = controller.processRequest(payload);
-
+    
     res.result(http::status::ok);
-    res.body() = json::serialize(response);
+    res.body() = json::serialize(response);  // boost::json → string
     res.prepare_payload();
+    
     http::write(socket, res, ec);
-
+    
     socket.shutdown(tcp::socket::shutdown_both, ec);
 }
 
