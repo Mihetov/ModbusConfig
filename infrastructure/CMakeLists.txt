@@ -1,9 +1,11 @@
 add_library(infrastructure
-    InfrastructureDummy.cpp
+    transport/InMemoryModbusTransport.cpp
+    transport/MazurelModbusTransport.cpp
 )
 
 target_link_libraries(infrastructure
     PUBLIC
+        core
         domain
         Qt5::Core
         Qt5::SerialPort
@@ -11,4 +13,8 @@ target_link_libraries(infrastructure
         Qt5::Network
 )
 
-target_include_directories(infrastructure PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(infrastructure
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)

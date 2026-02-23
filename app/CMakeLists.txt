@@ -8,3 +8,8 @@ target_link_libraries(ModbusConfig
         infrastructure
         Qt5::Core
 )
+
+target_include_directories(ModbusConfig
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+)

@@ -1,31 +1,31 @@
 #include <QCoreApplication>
-#include <QLocale>
-#include <QTranslator>
+#include <QTextStream>
+
+#include "core/api/ConsoleJsonApi.h"
+#include "core/application/ModbusApplicationService.h"
+#include "core/protocol/ModbusProtocolService.h"
+#include "infrastructure/transport/InMemoryModbusTransport.h"
 
 int main(int argc, char *argv[])
 {
-    QCoreApplication a(argc, argv);
+    QCoreApplication application(argc, argv);
 
-    QTranslator translator;
-    const QStringList uiLanguages = QLocale::system().uiLanguages();
-    for (const QString &locale : uiLanguages) {
-        const QString baseName = "ModbusConfig_" + QLocale(locale).name();
-        if (translator.load(":/i18n/" + baseName)) {
-            a.installTranslator(&translator);
-            break;
+    transport::InMemoryModbusTransport transport;
+    protocol::ModbusProtocolService protocolService(transport);
+    application::ModbusApplicationService applicationService(protocolService);
+    api::ConsoleJsonApi api(applicationService);
+
+    QTextStream input(stdin);
+    QTextStream output(stdout);
+
+    while (!input.atEnd()) {
+        const QString line = input.readLine().trimmed();
+        if (line.isEmpty()) {
+            continue;
         }
+
+        output << api.handleLine(line.toUtf8()) << Qt::endl;
     }
 
-    // Set up code that uses the Qt event loop here.
-    // Call a.quit() or a.exit() to quit the application.
-    // A not very useful example would be including
-    // #include <QTimer>
-    // near the top of the file and calling
-    // QTimer::singleShot(5000, &a, &QCoreApplication::quit);
-    // which quits the application after 5 seconds.
-
-    // If you do not need a running Qt event loop, remove the call
-    // to a.exec() or use the Non-Qt Plain C++ Application template.
-
-    return a.exec();
+    return 0;
 }

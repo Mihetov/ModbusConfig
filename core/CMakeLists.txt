@@ -1,9 +1,17 @@
 add_library(core
-    CoreDummy.cpp
+    api/ConsoleJsonApi.cpp
+    application/ModbusApplicationService.cpp
+    protocol/ModbusProtocolService.cpp
 )
 
 target_link_libraries(core
-    PUBLIC domain
+    PUBLIC
+        domain
+        Qt5::Core
 )
 
-target_include_directories(core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(core
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
