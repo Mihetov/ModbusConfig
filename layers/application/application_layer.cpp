@@ -1,92 +1,82 @@
 #include "application_layer.h"
-#include <QDebug>
 
-// Класс-адаптер для обработки событий транспорта
-class TransportEventHandlerImpl : public TransportEventHandler {
-public:
-    TransportEventHandlerImpl(ApplicationCore* appCore) : appCore_(appCore) {}
+namespace application {
 
-    void onFrameReceived(const std::vector<uint8_t>& frame, std::shared_ptr<Session> session) override {
-        if (appCore_) {
-            appCore_->onFrameReceived(frame, session);
+namespace json = boost::json;
+
+ApplicationCore::ApplicationCore(transport::TransportManager& transportManager)
+    : transportManager_(transportManager) {
+    transportManager_.setFrameCallback(
+        [this](const std::vector<std::uint8_t>& frame, const transport::SessionPtr& session) {
+            onTransportFrame(frame, session);
+        });
+
+    transportManager_.setConnectionCallback([this](bool connected, const transport::SessionPtr& session) {
+        if (!connected && session) {
+            deviceManager_.unbindSessionById(session->id());
         }
-    }
-
-    void onConnectionStatusChanged(bool connected) override {
-        if (appCore_) {
-            // Можно добавить обработку изменения статуса соединения
-            qDebug() << "Connection status changed:" << connected;
-        }
-    }
-
-private:
-    ApplicationCore* appCore_;
-};
-
-ApplicationCore::ApplicationCore(TransportManager* transportManager, QObject* parent)
-    : QObject(parent), transportManager_(transportManager) {
-
-    // Создаем и устанавливаем обработчик событий
-    auto eventHandler = new TransportEventHandlerImpl(this);
-    transportManager_->setEventHandler(eventHandler);
+    });
 }
 
-void ApplicationCore::sendModbusCommand(const MBCommand& cmd, std::shared_ptr<Session> session) {
-    ConnectionType type = session->getConnectionType();
-    // Получаем сырые байты из Protocol Layer
-    auto rawFrame = protocolHandler_.createModbusFrame(cmd, type);
-    // Отправляем через Transport Layer
-    transportManager_->sendToSession(rawFrame, session);
+void ApplicationCore::setJsonResponseCallback(std::function<void(const json::value&)> cb) {
+    jsonResponseCallback_ = std::move(cb);
 }
 
-void ApplicationCore::onFrameReceived(const std::vector<uint8_t>& frame, std::shared_ptr<Session> session) {
-    try {
-        ConnectionType type = session->getConnectionType();
-        int requestId = 0;
-        // Обрабатываем буфер (может содержать несколько фреймов)
-        auto jsonResponses = protocolHandler_.processIncomingBuffer(frame, type, requestId);
-        for (const auto& jsonResponse : jsonResponses) {
-            emit jsonResponseReady(jsonResponse);
+void ApplicationCore::handleJsonRequest(const json::value& request) {
+    taskScheduler_.post([this, request]() {
+        protocol::ModbusRequest command;
+        std::string error;
+
+        if (!protocolHandler_.jsonToRequest(request, command, error)) {
+            json::object response;
+            response["jsonrpc"] = "2.0";
+            response["id"] = request.is_object() && request.as_object().contains("id")
+                                 ? request.as_object().at("id")
+                                 : json::value(nullptr);
+            json::object err;
+            err["code"] = -32600;
+            err["message"] = error;
+            response["error"] = err;
+            emitJson(response);
+            return;
         }
-    }
-    catch (const std::exception& e) {
-        qWarning() << "Error processing frame:" << e.what();
-    }
+
+        auto device = deviceManager_.firstConnected();
+        if (!device || !device->session) {
+            json::object response;
+            response["jsonrpc"] = "2.0";
+            response["id"] = request.is_object() && request.as_object().contains("id")
+                                 ? request.as_object().at("id")
+                                 : json::value(nullptr);
+            json::object err;
+            err["code"] = -32603;
+            err["message"] = "No active device session";
+            response["error"] = err;
+            emitJson(response);
+            return;
+        }
+
+        const auto frame = protocolHandler_.createFrame(command, device->session->connectionType());
+        transportManager_.sendToSession(frame, device->session);
+    });
 }
 
-void ApplicationCore::handleJsonRequest(const boost::json::value& request) {
-    MBCommand cmd;
-    std::string error;
-    if (!protocolHandler_.jsonToMBCommand(request, cmd, error)) {
-        // Формирование ошибки
-        boost::json::object errorResponse;
-        errorResponse["jsonrpc"] = "2.0";
-        errorResponse["id"] = request.as_object().contains("id") ? request.at("id") : nullptr;
-
-        boost::json::object errObj;
-        errObj["code"] = -32600; // Invalid Request
-        errObj["message"] = error;
-
-        errorResponse["error"] = errObj;
-
-        emit jsonResponseReady(errorResponse);
+void ApplicationCore::onTransportFrame(const std::vector<std::uint8_t>& frame, const transport::SessionPtr& session) {
+    if (!session) {
         return;
     }
-    // Определение соединения и отправка команды
-    if (transportManager_->hasActiveConnections()) {
-        auto connection = transportManager_->getFirstConnection();
-        sendModbusCommand(cmd, connection);
-    } else {
-        boost::json::object errorResponse;
-        errorResponse["jsonrpc"] = "2.0";
-        errorResponse["id"] = request.as_object().contains("id") ? request.at("id") : nullptr;
 
-        boost::json::object errObj;
-        errObj["code"] = -32603; // Internal error
-        errObj["message"] = "No active Modbus connection";
-
-        errorResponse["error"] = errObj;
-
-        emit jsonResponseReady(errorResponse);
+    constexpr std::int64_t requestId = 0;
+    const auto responses = protocolHandler_.processIncomingBuffer(frame, session->connectionType(), requestId);
+    for (const auto& response : responses) {
+        emitJson(response);
     }
 }
+
+void ApplicationCore::emitJson(const json::value& value) const {
+    if (jsonResponseCallback_) {
+        jsonResponseCallback_(value);
+    }
+}
+
+} // namespace application

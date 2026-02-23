@@ -1,207 +1,264 @@
 #include "transport_layer.h"
-#include <iostream>
-#include <algorithm>
 
-// Реализация Session
-Session::Session(tcp::socket socket, TransportManager* manager)
-    : buffer_(), manager_(manager), socketOrPort_(std::move(socket)) {}
+#include <sstream>
 
-Session::Session(boost::asio::serial_port port, TransportManager* manager)
-    : buffer_(), manager_(manager), socketOrPort_(std::move(port)) {}
+namespace transport {
 
-void Session::start() {
-    std::visit([this](auto& socket) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(socket)>, tcp::socket>) {
-            doTcpRead();
-        } else {
-            doSerialRead();
-        }
-    }, socketOrPort_);
+namespace {
+
+template <typename Stream>
+void closeStream(Stream& stream) {
+    boost::system::error_code ec;
+    stream.cancel(ec);
+    stream.close(ec);
 }
 
-void Session::send(const std::vector<uint8_t>& data) {
-    std::visit([this, &data](auto& socket) {
-        boost::asio::async_write(socket, boost::asio::buffer(data.data(), data.size()),
-                                 [this](const boost::system::error_code &error, std::size_t) {
-                                     if (error && manager_) {
-                                         std::cerr << "Write error: " << error.message() << std::endl;
-                                     }
-                                 });
-    }, socketOrPort_);
+} // namespace
+
+Session::Session(std::uint64_t id, tcp::socket socket)
+    : id_(id), stream_(std::move(socket)) {}
+
+Session::Session(std::uint64_t id, boost::asio::serial_port port)
+    : id_(id), stream_(std::move(port)) {}
+
+std::uint64_t Session::id() const noexcept { return id_; }
+
+ConnectionType Session::connectionType() const noexcept {
+    return std::holds_alternative<tcp::socket>(stream_) ? ConnectionType::Tcp : ConnectionType::Rtu;
 }
 
-void Session::doTcpRead() {
-    auto self = shared_from_this();
-    // Убедимся, что это TCP-соединение
-    if (!isTCPConnection()) {
+void Session::start(FrameCallback onFrame, ErrorCallback onError) {
+    onFrame_ = std::move(onFrame);
+    onError_ = std::move(onError);
+    doRead();
+}
+
+void Session::send(const std::vector<uint8_t>& data, ErrorCallback onError) {
+    if (data.empty() || closed_) {
         return;
     }
-    // Используем std::get для извлечения сокета из variant
-    tcp::socket& socket = std::get<tcp::socket>(socketOrPort_);
-    // Читаем минимальное количество данных
-    boost::asio::async_read(socket,
-                            buffer_,
-                            boost::asio::transfer_at_least(1),
-                            [this, self](const boost::system::error_code& ec, std::size_t bytes_transferred) {
-                                if (ec) {
-                                    std::cerr << "TCP Read error: " << ec.message() << std::endl;
-                                    return;
-                                }
-                                // Создаем копию буфера для захвата в лямбду
-                                std::istream is(&buffer_);
-                                std::vector<uint8_t> data(bytes_transferred);
-                                is.read(reinterpret_cast<char*>(data.data()), bytes_transferred);
 
-                                // Отправляем данные через обработчик событий
-                                if (manager_ && manager_->eventHandler_) {
-                                    manager_->eventHandler_->onFrameReceived(data, shared_from_this());
-                                }
-
-                                // Продолжаем чтение
-                                doTcpRead();
-                            });
-}
-
-void Session::doSerialRead() {
     auto self = shared_from_this();
-    boost::asio::async_read(std::get<boost::asio::serial_port>(socketOrPort_), buffer_,
-                            boost::asio::transfer_at_least(1),
-                            [this, self](const boost::system::error_code &error, std::size_t bytes_transferred) {
-                                if (!error) {
-                                    std::istream is(&buffer_);
-                                    std::vector<uint8_t> data(bytes_transferred);
-                                    is.read(reinterpret_cast<char*>(data.data()), bytes_transferred);
-
-                                    // Отправляем данные через обработчик событий
-                                    if (manager_ && manager_->eventHandler_) {
-                                        manager_->eventHandler_->onFrameReceived(data, shared_from_this());
-                                    }
-
-                                    doSerialRead();
-                                } else {
-                                    std::cerr << "Serial Read error: " << error.message() << std::endl;
-                                }
-                            });
+    boost::asio::post(std::visit([](auto& stream) { return stream.get_executor(); }, stream_),
+        [this, self, payload = std::vector<uint8_t>(data), onError = std::move(onError)]() mutable {
+            const bool writeInProgress = !writeQueue_.empty();
+            writeQueue_.push_back(std::move(payload));
+            if (!writeInProgress) {
+                doWrite();
+            }
+            if (!onError_) {
+                onError_ = std::move(onError);
+            }
+        });
 }
 
-bool Session::isTCPConnection() const {
-    return std::holds_alternative<tcp::socket>(socketOrPort_);
+void Session::close() {
+    closed_ = true;
+    std::visit([](auto& stream) { closeStream(stream); }, stream_);
 }
 
-bool Session::isSerialConnection() const {
-    return std::holds_alternative<boost::asio::serial_port>(socketOrPort_);
+void Session::doRead() {
+    if (closed_) {
+        return;
+    }
+
+    auto self = shared_from_this();
+    std::visit(
+        [this, self](auto& stream) {
+            stream.async_read_some(
+                boost::asio::buffer(readBuffer_),
+                [this, self](const boost::system::error_code& ec, std::size_t bytesRead) {
+                    if (ec) {
+                        closed_ = true;
+                        if (ec != boost::asio::error::operation_aborted && onError_) {
+                            onError_("Read error in session " + std::to_string(id_) + ": " + ec.message());
+                        }
+                        return;
+                    }
+
+                    std::vector<uint8_t> frame(readBuffer_.begin(), readBuffer_.begin() + bytesRead);
+                    if (onFrame_) {
+                        onFrame_(frame, self);
+                    }
+                    doRead();
+                });
+        },
+        stream_);
 }
 
-// Реализация TransportManager
-TransportManager::TransportManager() {
-    running_ = true;
-    ioThread_ = std::thread(&TransportManager::runIoContext, this);
+void Session::doWrite() {
+    if (writeQueue_.empty() || closed_) {
+        return;
+    }
+
+    auto self = shared_from_this();
+    std::visit(
+        [this, self](auto& stream) {
+            boost::asio::async_write(
+                stream,
+                boost::asio::buffer(writeQueue_.front()),
+                [this, self](const boost::system::error_code& ec, std::size_t) {
+                    if (ec) {
+                        closed_ = true;
+                        if (ec != boost::asio::error::operation_aborted && onError_) {
+                            onError_("Write error in session " + std::to_string(id_) + ": " + ec.message());
+                        }
+                        return;
+                    }
+
+                    writeQueue_.pop_front();
+                    doWrite();
+                });
+        },
+        stream_);
 }
+
+TransportManager::TransportManager()
+    : workGuard_(boost::asio::make_work_guard(ioContext_)),
+      ioThread_([this]() { ioContext_.run(); }) {}
 
 TransportManager::~TransportManager() {
-    running_ = false;
+    disconnectAll();
+    workGuard_.reset();
     ioContext_.stop();
     if (ioThread_.joinable()) {
         ioThread_.join();
     }
 }
 
-void TransportManager::runIoContext() {
-    ioContext_.run();
-}
-
-void TransportManager::setEventHandler(TransportEventHandler* handler) {
-    eventHandler_ = handler;
-}
-
-bool TransportManager::connectToTcpSlave(const std::string& ip, uint16_t port) {
+SessionPtr TransportManager::connectTcpSlave(const std::string& ip, std::uint16_t port) {
     try {
-        // Создаем TCP-сокет
         tcp::socket socket(ioContext_);
-        // Подключаемся к Modbus-устройству (Slave)
-        socket.connect(tcp::endpoint(boost::asio::ip::address::from_string(ip), port));
+        socket.connect({boost::asio::ip::make_address(ip), port});
 
-        // Создаем сессию
-        auto session = std::make_shared<Session>(std::move(socket), this);
-        connections_.push_back(session);
-        session->start();
-
-        std::cout << "Connected to Modbus TCP device at " << ip << " port " << port << std::endl;
-
-        if (eventHandler_) {
-            eventHandler_->onConnectionStatusChanged(true);
+        auto session = std::make_shared<Session>(nextSessionId_++, std::move(socket));
+        {
+            std::lock_guard<std::mutex> lock(sessionsMutex_);
+            sessions_.emplace(session->id(), session);
         }
-
-        return true;
-    } catch (const boost::system::system_error& e) {
-        handleConnectionError("Failed to connect to TCP device: " + std::string(e.what()));
-        return false;
+        session->start(onFrame_, [this](const std::string& error) { notifyError(error); });
+        notifyConnected(session);
+        return session;
+    } catch (const std::exception& e) {
+        notifyError(std::string("TCP connect error: ") + e.what());
+        return nullptr;
     }
 }
 
-bool TransportManager::connectToSerialSlave(const std::string& portName, uint32_t baudRate) {
+SessionPtr TransportManager::connectSerialSlave(const std::string& portName, std::uint32_t baudRate) {
     try {
-        // Создаем и настраиваем последовательный порт
-        boost::asio::serial_port port(ioContext_, portName);
+        boost::asio::serial_port port(ioContext_);
+        port.open(portName);
         port.set_option(boost::asio::serial_port_base::baud_rate(baudRate));
         port.set_option(boost::asio::serial_port_base::character_size(8));
         port.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
         port.set_option(boost::asio::serial_port_base::stop_bits(boost::asio::serial_port_base::stop_bits::one));
 
-        // Создаем сессию для последовательного порта
-        auto session = std::make_shared<Session>(std::move(port), this);
-        connections_.push_back(session);
-        session->start();
-
-        std::cout << "Connected to Modbus RTU device on " << portName << " at " << baudRate << " baud" << std::endl;
-
-        if (eventHandler_) {
-            eventHandler_->onConnectionStatusChanged(true);
+        auto session = std::make_shared<Session>(nextSessionId_++, std::move(port));
+        {
+            std::lock_guard<std::mutex> lock(sessionsMutex_);
+            sessions_.emplace(session->id(), session);
         }
-
-        return true;
-    } catch (const boost::system::system_error& e) {
-        handleConnectionError("Failed to connect to serial device: " + std::string(e.what()));
-        return false;
+        session->start(onFrame_, [this](const std::string& error) { notifyError(error); });
+        notifyConnected(session);
+        return session;
+    } catch (const std::exception& e) {
+        notifyError(std::string("Serial connect error: ") + e.what());
+        return nullptr;
     }
 }
 
-void TransportManager::disconnect() {
-    connections_.clear();
-    if (eventHandler_) {
-        eventHandler_->onConnectionStatusChanged(false);
+void TransportManager::sendToSession(const std::vector<uint8_t>& data, const SessionPtr& session) {
+    if (!session) {
+        notifyError("Cannot send: session is null");
+        return;
     }
-    std::cout << "Disconnected from all Modbus devices" << std::endl;
+
+    std::lock_guard<std::mutex> lock(sessionsMutex_);
+    auto it = sessions_.find(session->id());
+    if (it == sessions_.end()) {
+        notifyError("Cannot send: session is not active");
+        return;
+    }
+
+    it->second->send(data, [this](const std::string& error) { notifyError(error); });
+}
+
+void TransportManager::disconnectSession(std::uint64_t sessionId) {
+    SessionPtr session;
+    {
+        std::lock_guard<std::mutex> lock(sessionsMutex_);
+        auto it = sessions_.find(sessionId);
+        if (it == sessions_.end()) {
+            return;
+        }
+        session = it->second;
+        sessions_.erase(it);
+    }
+
+    session->close();
+    notifyDisconnected(session);
+}
+
+void TransportManager::disconnectAll() {
+    std::vector<SessionPtr> sessions;
+    {
+        std::lock_guard<std::mutex> lock(sessionsMutex_);
+        for (auto& [_, session] : sessions_) {
+            sessions.push_back(session);
+        }
+        sessions_.clear();
+    }
+
+    for (const auto& session : sessions) {
+        session->close();
+        notifyDisconnected(session);
+    }
 }
 
 bool TransportManager::hasActiveConnections() const {
-    return !connections_.empty();
+    std::lock_guard<std::mutex> lock(sessionsMutex_);
+    return !sessions_.empty();
 }
 
-std::shared_ptr<Session> TransportManager::getFirstConnection() const {
-    if (!connections_.empty()) {
-        return connections_.front();
+SessionPtr TransportManager::getFirstConnection() const {
+    std::lock_guard<std::mutex> lock(sessionsMutex_);
+    if (sessions_.empty()) {
+        return nullptr;
     }
-    return nullptr;
+    return sessions_.begin()->second;
 }
 
-std::vector<std::shared_ptr<Session>> TransportManager::getAllConnections() const {
-    return connections_;
+std::vector<SessionPtr> TransportManager::getAllConnections() const {
+    std::vector<SessionPtr> result;
+    std::lock_guard<std::mutex> lock(sessionsMutex_);
+    result.reserve(sessions_.size());
+    for (const auto& [_, session] : sessions_) {
+        result.push_back(session);
+    }
+    return result;
 }
 
-void TransportManager::handleConnectionError(const std::string& error) {
-    std::cerr << error << std::endl;
-    if (eventHandler_) {
-        eventHandler_->onConnectionStatusChanged(false);
+void TransportManager::setFrameCallback(FrameCallback cb) { onFrame_ = std::move(cb); }
+void TransportManager::setConnectionCallback(ConnectionCallback cb) { onConnection_ = std::move(cb); }
+void TransportManager::setErrorCallback(ErrorCallback cb) { onError_ = std::move(cb); }
+
+void TransportManager::notifyConnected(const SessionPtr& session) {
+    if (onConnection_) {
+        onConnection_(true, session);
     }
 }
 
-void TransportManager::sendToSession(const std::vector<uint8_t>& data, std::shared_ptr<Session> session) {
-    // Проверяем, существует ли сессия в списке активных соединений
-    auto it = std::find(connections_.begin(), connections_.end(), session);
-    if (it != connections_.end()) {
-        session->send(data);
-    } else {
-        std::cerr << "Attempt to send data to inactive session" << std::endl;
+void TransportManager::notifyDisconnected(const SessionPtr& session) {
+    if (onConnection_) {
+        onConnection_(false, session);
     }
 }
+
+void TransportManager::notifyError(const std::string& error) const {
+    if (onError_) {
+        onError_(error);
+    }
+}
+
+} // namespace transport

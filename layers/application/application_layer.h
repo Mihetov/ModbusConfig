@@ -1,26 +1,39 @@
 #pragma once
 
-#include <memory>
-#include <vector>
 #include <boost/json.hpp>
+
+#include <functional>
+#include <string>
+
+#include "DeviceManager.h"
 #include "layers/protocol/protocol_layer.h"
 #include "layers/transport/transport_layer.h"
 
-class ApplicationCore : public QObject {
-    Q_OBJECT
+namespace application {
+
+class TaskScheduler {
 public:
-    explicit ApplicationCore(TransportManager* transportManager, QObject* parent = nullptr);
+    void post(const std::function<void()>& task) const { task(); }
+};
 
+class ApplicationCore {
+public:
+    explicit ApplicationCore(transport::TransportManager& transportManager);
+
+    void setJsonResponseCallback(std::function<void(const boost::json::value&)> cb);
     void handleJsonRequest(const boost::json::value& request);
-    void sendModbusCommand(const MBCommand& cmd, std::shared_ptr<Session> session);
 
-signals:
-    void jsonResponseReady(const boost::json::value& response);
-
-private slots:
-    void onFrameReceived(const std::vector<uint8_t>& frame, std::shared_ptr<Session> session);
+    DeviceManager& deviceManager() noexcept { return deviceManager_; }
 
 private:
-    TransportManager* transportManager_;
-    ProtocolHandler protocolHandler_;
+    void onTransportFrame(const std::vector<std::uint8_t>& frame, const transport::SessionPtr& session);
+    void emitJson(const boost::json::value& value) const;
+
+    transport::TransportManager& transportManager_;
+    protocol::ProtocolHandler protocolHandler_;
+    DeviceManager deviceManager_;
+    TaskScheduler taskScheduler_;
+    std::function<void(const boost::json::value&)> jsonResponseCallback_;
 };
+
+} // namespace application
