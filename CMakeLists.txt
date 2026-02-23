@@ -18,6 +18,8 @@ add_executable(${PROJECT_NAME}
     layers/application/Device.cpp
     layers/application/DeviceManager.h
     layers/application/DeviceManager.cpp
+    layers/api/api_layer.cpp
+    layers/api/api_layer.h
     layers/protocol/protocol_layer.cpp
     layers/protocol/protocol_layer.h
     layers/transport/transport_layer.cpp
