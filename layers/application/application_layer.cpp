@@ -1,6 +1,11 @@
 #include "application_layer.h"
 
 #include <utility>
+#include <filesystem>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace application {
 
@@ -106,6 +111,34 @@ bool ApplicationCore::switchTransport(const TransportConfig& target, std::string
 TransportConfig ApplicationCore::transportStatus() const {
     std::lock_guard<std::mutex> lock(transportConfigMutex_);
     return transportConfig_;
+}
+
+std::vector<std::string> ApplicationCore::listSerialPorts() const {
+    std::vector<std::string> ports;
+#ifdef _WIN32
+    for (int i = 1; i <= 256; ++i) {
+        const std::string name = "COM" + std::to_string(i);
+        char targetPath[16] = {0};
+        if (QueryDosDeviceA(name.c_str(), targetPath, static_cast<DWORD>(sizeof(targetPath))) != 0) {
+            ports.push_back(name);
+        }
+    }
+#else
+    const std::vector<std::string> prefixes = {"ttyS", "ttyUSB", "ttyACM", "ttyAMA", "rfcomm"};
+    const std::filesystem::path devPath{"/dev"};
+    if (std::filesystem::exists(devPath)) {
+        for (const auto& entry : std::filesystem::directory_iterator(devPath)) {
+            const auto fileName = entry.path().filename().string();
+            for (const auto& prefix : prefixes) {
+                if (fileName.rfind(prefix, 0) == 0) {
+                    ports.push_back(entry.path().string());
+                    break;
+                }
+            }
+        }
+    }
+#endif
+    return ports;
 }
 
 bool ApplicationCore::readRegisters(std::uint8_t slaveId, std::uint16_t address, std::uint16_t count, bool input, std::string& error) {

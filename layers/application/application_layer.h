@@ -42,6 +42,7 @@ public:
     bool closeActiveTransport(boost::json::object& closedInfo);
     bool switchTransport(const TransportConfig& target, std::string& error, boost::json::object& closedInfo);
     TransportConfig transportStatus() const;
+    std::vector<std::string> listSerialPorts() const;
 
     bool readRegisters(std::uint8_t slaveId, std::uint16_t address, std::uint16_t count, bool input, std::string& error);
     bool writeSingleRegister(std::uint8_t slaveId, std::uint16_t address, std::uint16_t value, std::string& error);

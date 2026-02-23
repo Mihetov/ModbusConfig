@@ -2,12 +2,70 @@
 
 #include <boost/beast/version.hpp>
 
+#include <charconv>
+
 namespace api {
 
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace json = boost::json;
 using tcp = boost::asio::ip::tcp;
+
+namespace {
+
+bool parseUint16Flexible(const json::value& value, std::uint16_t& out) {
+    if (value.is_int64()) {
+        const auto v = value.as_int64();
+        if (v < 0 || v > 0xFFFF) {
+            return false;
+        }
+        out = static_cast<std::uint16_t>(v);
+        return true;
+    }
+
+    if (!value.is_string()) {
+        return false;
+    }
+
+    std::string text = std::string(value.as_string().c_str());
+    int base = 10;
+    if (text.rfind("0x", 0) == 0 || text.rfind("0X", 0) == 0) {
+        text = text.substr(2);
+        base = 16;
+    }
+
+    unsigned int parsed = 0;
+    const auto* begin = text.data();
+    const auto* end = begin + text.size();
+    const auto res = std::from_chars(begin, end, parsed, base);
+    if (res.ec != std::errc() || res.ptr != end || parsed > 0xFFFF) {
+        return false;
+    }
+
+    out = static_cast<std::uint16_t>(parsed);
+    return true;
+}
+
+bool parseUint8Strict(const json::object& obj, const char* key, std::uint8_t& out) {
+    if (!obj.contains(key) || !obj.at(key).is_int64()) {
+        return false;
+    }
+    const auto v = obj.at(key).as_int64();
+    if (v < 0 || v > 255) {
+        return false;
+    }
+    out = static_cast<std::uint8_t>(v);
+    return true;
+}
+
+bool parseAddressField(const json::object& obj, std::uint16_t& out) {
+    if (!obj.contains("address")) {
+        return false;
+    }
+    return parseUint16Flexible(obj.at("address"), out);
+}
+
+} // namespace
 
 ApiController::ApiController(application::ApplicationCore& appCore)
     : appCore_(appCore) {}
@@ -53,6 +111,14 @@ json::value ApiController::processSingle(const json::object& req) {
         result["status"] = "ok";
         result["service"] = "modbus-host";
         return okResponse(id, result);
+    }
+
+    if (method == "transport.serial_ports") {
+        json::array ports;
+        for (const auto& p : appCore_.listSerialPorts()) {
+            ports.emplace_back(p);
+        }
+        return okResponse(id, json::object{{"ports", ports}});
     }
 
     if (method == "transport.status") {
@@ -132,11 +198,18 @@ json::value ApiController::processSingle(const json::object& req) {
         if (!params.contains("slave_id") || !params.contains("address") || !params.contains("count")) {
             return errorResponse(id, -32602, "slave_id, address, count are required");
         }
+
+        std::uint8_t slaveId = 0;
+        std::uint16_t address = 0;
+        if (!parseUint8Strict(params, "slave_id", slaveId) || !parseAddressField(params, address) || !params.at("count").is_int64()) {
+            return errorResponse(id, -32602, "Invalid slave_id/address/count format");
+        }
+
         std::string error;
         const bool input = params.contains("input") && params.at("input").as_bool();
         const bool ok = appCore_.readRegisters(
-            static_cast<std::uint8_t>(params.at("slave_id").as_int64()),
-            static_cast<std::uint16_t>(params.at("address").as_int64()),
+            slaveId,
+            address,
             static_cast<std::uint16_t>(params.at("count").as_int64()),
             input,
             error);
@@ -158,8 +231,10 @@ json::value ApiController::processSingle(const json::object& req) {
             }
             const auto& r = item.as_object();
             protocol::ModbusRequest req;
-            req.slaveId = static_cast<std::uint8_t>(r.at("slave_id").as_int64());
-            req.startAddress = static_cast<std::uint16_t>(r.at("address").as_int64());
+            if (!parseUint8Strict(r, "slave_id", req.slaveId) || !parseAddressField(r, req.startAddress) ||
+                !r.contains("count") || !r.at("count").is_int64()) {
+                return errorResponse(id, -32602, "Invalid group read item format");
+            }
             req.count = static_cast<std::uint16_t>(r.at("count").as_int64());
             req.function = r.contains("input") && r.at("input").as_bool()
                                ? protocol::FunctionCode::ReadInputRegisters
@@ -179,24 +254,25 @@ json::value ApiController::processSingle(const json::object& req) {
             return errorResponse(id, -32602, "slave_id and address are required");
         }
 
+        std::uint8_t slaveId = 0;
+        std::uint16_t address = 0;
+        if (!parseUint8Strict(params, "slave_id", slaveId) || !parseAddressField(params, address)) {
+            return errorResponse(id, -32602, "Invalid slave_id/address format");
+        }
+
         std::string error;
         bool ok = false;
         if (params.contains("values") && params.at("values").is_array()) {
             std::vector<std::uint16_t> values;
             for (const auto& v : params.at("values").as_array()) {
+                if (!v.is_int64()) {
+                    return errorResponse(id, -32602, "values must be int array");
+                }
                 values.push_back(static_cast<std::uint16_t>(v.as_int64()));
             }
-            ok = appCore_.writeMultipleRegisters(
-                static_cast<std::uint8_t>(params.at("slave_id").as_int64()),
-                static_cast<std::uint16_t>(params.at("address").as_int64()),
-                values,
-                error);
-        } else if (params.contains("value")) {
-            ok = appCore_.writeSingleRegister(
-                static_cast<std::uint8_t>(params.at("slave_id").as_int64()),
-                static_cast<std::uint16_t>(params.at("address").as_int64()),
-                static_cast<std::uint16_t>(params.at("value").as_int64()),
-                error);
+            ok = appCore_.writeMultipleRegisters(slaveId, address, values, error);
+        } else if (params.contains("value") && params.at("value").is_int64()) {
+            ok = appCore_.writeSingleRegister(slaveId, address, static_cast<std::uint16_t>(params.at("value").as_int64()), error);
         } else {
             return errorResponse(id, -32602, "value or values required");
         }
@@ -219,17 +295,24 @@ json::value ApiController::processSingle(const json::object& req) {
             }
             const auto& r = item.as_object();
             protocol::ModbusRequest req;
-            req.slaveId = static_cast<std::uint8_t>(r.at("slave_id").as_int64());
-            req.startAddress = static_cast<std::uint16_t>(r.at("address").as_int64());
+            if (!parseUint8Strict(r, "slave_id", req.slaveId) || !parseAddressField(r, req.startAddress)) {
+                return errorResponse(id, -32602, "Invalid group write item format");
+            }
+
             if (r.contains("values") && r.at("values").is_array()) {
                 req.function = protocol::FunctionCode::WriteMultipleRegisters;
                 for (const auto& v : r.at("values").as_array()) {
+                    if (!v.is_int64()) {
+                        return errorResponse(id, -32602, "values must be int array");
+                    }
                     req.values.push_back(static_cast<std::uint16_t>(v.as_int64()));
                 }
                 req.count = static_cast<std::uint16_t>(req.values.size());
-            } else {
+            } else if (r.contains("value") && r.at("value").is_int64()) {
                 req.function = protocol::FunctionCode::WriteSingleRegister;
                 req.values.push_back(static_cast<std::uint16_t>(r.at("value").as_int64()));
+            } else {
+                return errorResponse(id, -32602, "Each write_group item needs value or values");
             }
             requests.push_back(req);
         }
