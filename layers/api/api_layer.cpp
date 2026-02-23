@@ -206,17 +206,23 @@ json::value ApiController::processSingle(const json::object& req) {
         }
 
         std::string error;
+        json::object readResult;
         const bool input = params.contains("input") && params.at("input").as_bool();
-        const bool ok = appCore_.readRegisters(
+        const std::uint32_t timeoutMs = params.contains("timeout_ms") && params.at("timeout_ms").is_int64()
+                                            ? static_cast<std::uint32_t>(params.at("timeout_ms").as_int64())
+                                            : 2000U;
+        const bool ok = appCore_.readRegistersDetailed(
             slaveId,
             address,
             static_cast<std::uint16_t>(params.at("count").as_int64()),
             input,
-            error);
+            readResult,
+            error,
+            timeoutMs);
         if (!ok) {
             return errorResponse(id, -32002, error);
         }
-        return okResponse(id, json::object{{"accepted", true}});
+        return okResponse(id, readResult);
     }
 
     if (method == "modbus.read_group") {
@@ -243,10 +249,18 @@ json::value ApiController::processSingle(const json::object& req) {
         }
 
         std::string error;
-        if (!appCore_.readGroup(requests, error)) {
+        json::array groupResults;
+        const std::uint32_t timeoutMs = params.contains("timeout_ms") && params.at("timeout_ms").is_int64()
+                                            ? static_cast<std::uint32_t>(params.at("timeout_ms").as_int64())
+                                            : 2000U;
+        if (!appCore_.readGroupDetailed(requests, groupResults, error, timeoutMs)) {
             return errorResponse(id, -32002, error);
         }
-        return okResponse(id, json::object{{"accepted", true}, {"count", requests.size()}});
+        json::object payload;
+        payload["ok"] = true;
+        payload["count"] = requests.size();
+        payload["results"] = groupResults;
+        return okResponse(id, payload);
     }
 
     if (method == "modbus.write") {

@@ -1,7 +1,8 @@
 #include "application_layer.h"
 
-#include <utility>
 #include <filesystem>
+#include <chrono>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -10,6 +11,12 @@
 namespace application {
 
 namespace json = boost::json;
+
+namespace {
+bool isReadFunctionString(const std::string& fn) {
+    return fn == "read_holding" || fn == "read_input";
+}
+}
 
 ApplicationCore::ApplicationCore(transport::TransportManager& transportManager)
     : transportManager_(transportManager) {
@@ -150,6 +157,16 @@ bool ApplicationCore::readRegisters(std::uint8_t slaveId, std::uint16_t address,
     return sendCommand(request, error);
 }
 
+bool ApplicationCore::readRegistersDetailed(std::uint8_t slaveId, std::uint16_t address, std::uint16_t count, bool input,
+                                           json::object& result, std::string& error, std::uint32_t timeoutMs) {
+    protocol::ModbusRequest request;
+    request.slaveId = slaveId;
+    request.function = input ? protocol::FunctionCode::ReadInputRegisters : protocol::FunctionCode::ReadHoldingRegisters;
+    request.startAddress = address;
+    request.count = count;
+    return sendReadAndWait(request, result, error, timeoutMs);
+}
+
 bool ApplicationCore::writeSingleRegister(std::uint8_t slaveId, std::uint16_t address, std::uint16_t value, std::string& error) {
     protocol::ModbusRequest request;
     request.slaveId = slaveId;
@@ -183,6 +200,18 @@ bool ApplicationCore::readGroup(const std::vector<protocol::ModbusRequest>& requ
     return true;
 }
 
+bool ApplicationCore::readGroupDetailed(const std::vector<protocol::ModbusRequest>& requests, json::array& results,
+                                        std::string& error, std::uint32_t timeoutMs) {
+    for (const auto& request : requests) {
+        json::object single;
+        if (!sendReadAndWait(request, single, error, timeoutMs)) {
+            return false;
+        }
+        results.emplace_back(single);
+    }
+    return true;
+}
+
 bool ApplicationCore::writeGroup(const std::vector<protocol::ModbusRequest>& requests, std::string& error) {
     for (const auto& request : requests) {
         if (!sendCommand(request, error)) {
@@ -204,6 +233,36 @@ bool ApplicationCore::sendCommand(const protocol::ModbusRequest& command, std::s
     return true;
 }
 
+bool ApplicationCore::sendReadAndWait(const protocol::ModbusRequest& command, json::object& result, std::string& error, std::uint32_t timeoutMs) {
+    const auto token = nextReadToken_.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(pendingReadsMutex_);
+        pendingReads_.push_back(PendingReadContext{token, command.slaveId, command.startAddress, command.count});
+    }
+
+    if (!sendCommand(command, error)) {
+        std::lock_guard<std::mutex> lock(pendingReadsMutex_);
+        if (!pendingReads_.empty() && pendingReads_.back().token == token) {
+            pendingReads_.pop_back();
+        }
+        return false;
+    }
+
+    std::unique_lock<std::mutex> lock(pendingReadsMutex_);
+    const auto ready = pendingReadsCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]() {
+        return completedReads_.find(token) != completedReads_.end();
+    });
+
+    if (!ready) {
+        error = "Timeout waiting for Modbus read response";
+        return false;
+    }
+
+    result = completedReads_[token];
+    completedReads_.erase(token);
+    return true;
+}
+
 void ApplicationCore::onTransportFrame(const std::vector<std::uint8_t>& frame, const transport::SessionPtr& session) {
     if (!session) {
         return;
@@ -213,8 +272,48 @@ void ApplicationCore::onTransportFrame(const std::vector<std::uint8_t>& frame, c
     const auto id = requestId.fetch_add(1);
     const auto responses = protocolHandler_.processIncomingBuffer(frame, session->connectionType(), id);
     for (const auto& response : responses) {
+        if (response.is_object()) {
+            const auto& obj = response.as_object();
+            if (obj.contains("result") && obj.at("result").is_object()) {
+                handleReadResponse(obj);
+            }
+        }
         emitJson(response);
     }
+}
+
+void ApplicationCore::handleReadResponse(const json::object& responseObject) {
+    const auto& result = responseObject.at("result").as_object();
+    if (!result.contains("function") || !result.at("function").is_string()) {
+        return;
+    }
+
+    const std::string function = std::string(result.at("function").as_string().c_str());
+    if (!isReadFunctionString(function)) {
+        return;
+    }
+
+    PendingReadContext pending;
+    {
+        std::lock_guard<std::mutex> lock(pendingReadsMutex_);
+        if (pendingReads_.empty()) {
+            return;
+        }
+        pending = pendingReads_.front();
+        pendingReads_.pop_front();
+
+        json::object enriched;
+        enriched["ok"] = true;
+        enriched["slave_id"] = pending.slaveId;
+        enriched["address"] = pending.address;
+        enriched["count"] = pending.count;
+        enriched["function"] = function;
+        enriched["values"] = result.contains("values") ? result.at("values") : json::array{};
+
+        completedReads_[pending.token] = std::move(enriched);
+    }
+
+    pendingReadsCv_.notify_all();
 }
 
 void ApplicationCore::emitJson(const json::value& value) const {
