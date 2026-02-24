@@ -2,7 +2,13 @@
 
 #include <boost/beast/version.hpp>
 
+#include <algorithm>
+#include <array>
 #include <charconv>
+#include <cctype>
+#include <cstring>
+#include <ctime>
+#include <sstream>
 
 namespace api {
 
@@ -63,6 +69,223 @@ bool parseAddressField(const json::object& obj, std::uint16_t& out) {
         return false;
     }
     return parseUint16Flexible(obj.at("address"), out);
+}
+
+std::string toLowerAscii(const std::string& src) {
+    std::string out = src;
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return out;
+}
+
+std::string canonicalDataType(const std::string& value) {
+    const auto normalized = toLowerAscii(value);
+    if (normalized == "word") {
+        return "Word";
+    }
+    if (normalized == "byte") {
+        return "Byte";
+    }
+    if (normalized == "int8") {
+        return "Int8";
+    }
+    if (normalized == "int16") {
+        return "Int16";
+    }
+    if (normalized == "int32") {
+        return "Int32";
+    }
+    if (normalized == "float") {
+        return "Float";
+    }
+    if (normalized == "string") {
+        return "String";
+    }
+    if (normalized == "array") {
+        return "Array";
+    }
+    if (normalized == "tcp56") {
+        return "TCP56";
+    }
+    return {};
+}
+
+std::vector<std::uint8_t> registersToBytes(const json::array& values) {
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(values.size() * 2);
+    for (const auto& value : values) {
+        if (!value.is_int64()) {
+            continue;
+        }
+        const auto reg = static_cast<std::uint16_t>(value.as_int64());
+        bytes.push_back(static_cast<std::uint8_t>((reg >> 8) & 0xFF));
+        bytes.push_back(static_cast<std::uint8_t>(reg & 0xFF));
+    }
+    return bytes;
+}
+
+json::value decodeRegisters(const json::array& values, const std::string& dataType, const json::object& params,
+                            std::string& error) {
+    if (dataType == "Word") {
+        return values;
+    }
+
+    const auto bytes = registersToBytes(values);
+    if (dataType == "Byte") {
+        json::array out;
+        for (const auto b : bytes) {
+            out.push_back(b);
+        }
+        return out;
+    }
+
+    if (dataType == "Int8") {
+        json::array out;
+        for (const auto b : bytes) {
+            out.push_back(static_cast<std::int8_t>(b));
+        }
+        return out;
+    }
+
+    if (dataType == "Int16") {
+        json::array out;
+        for (const auto& v : values) {
+            out.push_back(static_cast<std::int16_t>(v.as_int64()));
+        }
+        return out;
+    }
+
+    if (dataType == "Int32") {
+        if (bytes.size() < 4) {
+            error = "Int32 requires at least 2 registers";
+            return nullptr;
+        }
+        const std::int32_t value = (static_cast<std::int32_t>(bytes[0]) << 24) |
+                                   (static_cast<std::int32_t>(bytes[1]) << 16) |
+                                   (static_cast<std::int32_t>(bytes[2]) << 8) |
+                                   static_cast<std::int32_t>(bytes[3]);
+        return value;
+    }
+
+    if (dataType == "Float") {
+        if (bytes.size() < 4) {
+            error = "Float requires at least 2 registers";
+            return nullptr;
+        }
+        const std::uint32_t raw = (static_cast<std::uint32_t>(bytes[0]) << 24) |
+                                  (static_cast<std::uint32_t>(bytes[1]) << 16) |
+                                  (static_cast<std::uint32_t>(bytes[2]) << 8) |
+                                  static_cast<std::uint32_t>(bytes[3]);
+        float value = 0.0F;
+        std::memcpy(&value, &raw, sizeof(value));
+        return value;
+    }
+
+    if (dataType == "String") {
+        std::size_t length = bytes.size();
+        if (params.contains("string_length") && params.at("string_length").is_int64() && params.at("string_length").as_int64() > 0) {
+            length = static_cast<std::size_t>(params.at("string_length").as_int64());
+        }
+        length = std::min(length, bytes.size());
+        std::string out(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(length));
+        const auto zeroPos = out.find('\0');
+        if (zeroPos != std::string::npos) {
+            out.resize(zeroPos);
+        }
+        return out;
+    }
+
+    if (dataType == "Array") {
+        json::array out;
+        for (const auto& value : values) {
+            out.push_back(value);
+        }
+        return out;
+    }
+
+    if (dataType == "TCP56") {
+        if (bytes.size() < 7) {
+            error = "TCP56 requires at least 4 registers";
+            return nullptr;
+        }
+        const std::uint16_t millis = static_cast<std::uint16_t>(bytes[0] | (bytes[1] << 8));
+        const std::uint8_t minute = bytes[2] & 0x3F;
+        const std::uint8_t hour = bytes[3] & 0x1F;
+        const std::uint8_t day = bytes[4] & 0x1F;
+        const std::uint8_t month = bytes[5] & 0x0F;
+        const int year = 2000 + (bytes[6] & 0x7F);
+
+        json::object out;
+        out["milliseconds"] = millis;
+        out["minute"] = minute;
+        out["hour"] = hour;
+        out["day"] = day;
+        out["month"] = month;
+        out["year"] = year;
+
+        std::ostringstream iso;
+        iso << year << "-";
+        if (month < 10) {
+            iso << "0";
+        }
+        iso << static_cast<int>(month) << "-";
+        if (day < 10) {
+            iso << "0";
+        }
+        iso << static_cast<int>(day) << "T";
+        if (hour < 10) {
+            iso << "0";
+        }
+        iso << static_cast<int>(hour) << ":";
+        if (minute < 10) {
+            iso << "0";
+        }
+        iso << static_cast<int>(minute) << ":";
+        const auto seconds = millis / 1000;
+        const auto ms = millis % 1000;
+        if (seconds < 10) {
+            iso << "0";
+        }
+        iso << seconds << ".";
+        if (ms < 100) {
+            iso << "0";
+        }
+        if (ms < 10) {
+            iso << "0";
+        }
+        iso << ms;
+        out["iso8601"] = iso.str();
+        return out;
+    }
+
+    error = "Unsupported data_type";
+    return nullptr;
+}
+
+bool enrichReadResultWithType(json::object& readResult, const json::object& params, std::string& error) {
+    const std::string requested = params.contains("data_type") && params.at("data_type").is_string()
+                                      ? std::string(params.at("data_type").as_string().c_str())
+                                      : "Word";
+    const auto canonical = canonicalDataType(requested);
+    if (canonical.empty()) {
+        error = "Unsupported data_type";
+        return false;
+    }
+
+    if (!readResult.contains("values") || !readResult.at("values").is_array()) {
+        error = "Internal error: values field is missing";
+        return false;
+    }
+
+    const auto decoded = decodeRegisters(readResult.at("values").as_array(), canonical, params, error);
+    if (decoded.is_null()) {
+        return false;
+    }
+
+    readResult["data_type"] = canonical;
+    readResult["decoded"] = decoded;
+    return true;
 }
 
 } // namespace
@@ -222,6 +445,10 @@ json::value ApiController::processSingle(const json::object& req) {
         if (!ok) {
             return errorResponse(id, -32002, error);
         }
+
+        if (!enrichReadResultWithType(readResult, params, error)) {
+            return errorResponse(id, -32602, error);
+        }
         return okResponse(id, readResult);
     }
 
@@ -256,6 +483,20 @@ json::value ApiController::processSingle(const json::object& req) {
         if (!appCore_.readGroupDetailed(requests, groupResults, error, timeoutMs)) {
             return errorResponse(id, -32002, error);
         }
+
+        const auto& requestItems = params.at("requests").as_array();
+        for (std::size_t i = 0; i < groupResults.size() && i < requestItems.size(); ++i) {
+            if (!groupResults[i].is_object()) {
+                continue;
+            }
+            const json::object reqParams = requestItems[i].as_object();
+            auto resultObj = groupResults[i].as_object();
+            if (!enrichReadResultWithType(resultObj, reqParams, error)) {
+                return errorResponse(id, -32602, "requests[" + std::to_string(i) + "]: " + error);
+            }
+            groupResults[i] = resultObj;
+        }
+
         json::object payload;
         payload["ok"] = true;
         payload["count"] = requests.size();
