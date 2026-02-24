@@ -1,5 +1,6 @@
 #include "protocol_layer.h"
 
+#include <cstddef>
 #include <stdexcept>
 
 namespace protocol {
@@ -144,25 +145,50 @@ std::vector<json::value> ProtocolHandler::processIncomingBuffer(
         return result;
     }
 
-    while (buffer.size() >= 5) {
-        // Simple heuristic: unit + func + at least 2 bytes + crc.
-        std::size_t frameSize = buffer.size();
-        if (frameSize < 5) {
+    std::size_t offset = 0;
+    while (buffer.size() >= offset + 5) {
+        const std::uint8_t function = buffer[offset + 1];
+
+        std::size_t frameLen = 0;
+        if ((function & 0x80U) != 0U) {
+            frameLen = 5; // slave + exception function + code + crc(2)
+        } else if (function == static_cast<std::uint8_t>(FunctionCode::ReadHoldingRegisters) ||
+                   function == static_cast<std::uint8_t>(FunctionCode::ReadInputRegisters)) {
+            const std::size_t byteCountIndex = offset + 2;
+            if (buffer.size() <= byteCountIndex) {
+                break;
+            }
+            const std::size_t byteCount = buffer[byteCountIndex];
+            frameLen = 3 + byteCount + 2; // slave + func + byteCount + data + crc(2)
+        } else if (function == static_cast<std::uint8_t>(FunctionCode::WriteSingleRegister) ||
+                   function == static_cast<std::uint8_t>(FunctionCode::WriteMultipleRegisters)) {
+            frameLen = 8; // slave + func + addr(2) + qty/value(2) + crc(2)
+        } else {
+            ++offset;
+            continue;
+        }
+
+        if (buffer.size() < offset + frameLen) {
             break;
         }
-        std::vector<std::uint8_t> candidate(buffer.begin(), buffer.end());
-        if (candidate.size() < 3) {
-            break;
-        }
-        const auto expected = static_cast<std::uint16_t>((candidate[candidate.size() - 1] << 8) |
-                                                         candidate[candidate.size() - 2]);
-        candidate.resize(candidate.size() - 2);
-        const auto actual = crc16(candidate);
+
+        std::vector<std::uint8_t> frame(buffer.begin() + static_cast<std::ptrdiff_t>(offset),
+                                        buffer.begin() + static_cast<std::ptrdiff_t>(offset + frameLen));
+
+        const auto expected = static_cast<std::uint16_t>((frame[frameLen - 1] << 8) | frame[frameLen - 2]);
+        std::vector<std::uint8_t> pdu(frame.begin(), frame.end() - 2);
+        const auto actual = crc16(pdu);
         if (actual != expected) {
-            break;
+            ++offset;
+            continue;
         }
-        result.push_back(responseToJson(parsePdu(candidate), requestId));
-        buffer.clear();
+
+        result.push_back(responseToJson(parsePdu(pdu), requestId));
+        offset += frameLen;
+    }
+
+    if (offset > 0) {
+        buffer.erase(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(offset));
     }
 
     return result;
