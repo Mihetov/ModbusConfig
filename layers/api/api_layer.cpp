@@ -110,14 +110,40 @@ std::string canonicalDataType(const std::string& value) {
     return {};
 }
 
+
+bool jsonToInt64Flexible(const json::value& value, std::int64_t& out) {
+    if (value.is_int64()) {
+        out = value.as_int64();
+        return true;
+    }
+    if (value.is_uint64()) {
+        const auto u = value.as_uint64();
+        if (u > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+            return false;
+        }
+        out = static_cast<std::int64_t>(u);
+        return true;
+    }
+    return false;
+}
+
+bool jsonToRegister(const json::value& value, std::uint16_t& out) {
+    std::int64_t n = 0;
+    if (!jsonToInt64Flexible(value, n) || n < 0 || n > 0xFFFF) {
+        return false;
+    }
+    out = static_cast<std::uint16_t>(n);
+    return true;
+}
+
 std::vector<std::uint8_t> registersToBytes(const json::array& values) {
     std::vector<std::uint8_t> bytes;
     bytes.reserve(values.size() * 2);
     for (const auto& value : values) {
-        if (!value.is_int64()) {
+        std::uint16_t reg = 0;
+        if (!jsonToRegister(value, reg)) {
             continue;
         }
-        const auto reg = static_cast<std::uint16_t>(value.as_int64());
         bytes.push_back(static_cast<std::uint8_t>((reg >> 8) & 0xFF));
         bytes.push_back(static_cast<std::uint8_t>(reg & 0xFF));
     }
@@ -150,7 +176,12 @@ json::value decodeRegisters(const json::array& values, const std::string& dataTy
     if (dataType == "Int16") {
         json::array out;
         for (const auto& v : values) {
-            out.push_back(static_cast<std::int16_t>(v.as_int64()));
+            std::uint16_t reg = 0;
+            if (!jsonToRegister(v, reg)) {
+                error = "Invalid register value for Int16";
+                return nullptr;
+            }
+            out.push_back(static_cast<std::int16_t>(reg));
         }
         return out;
     }
@@ -278,11 +309,15 @@ bool enrichReadResultWithType(json::object& readResult, const json::object& para
     }
 
     const auto decoded = decodeRegisters(readResult.at("values").as_array(), canonical, params, error);
-    if (decoded.is_null()) {
-        return false;
-    }
 
     readResult["data_type"] = canonical;
+    if (decoded.is_null()) {
+        readResult["decoded"] = nullptr;
+        readResult["decode_error"] = error;
+        error.clear();
+        return true;
+    }
+
     readResult["decoded"] = decoded;
     return true;
 }
