@@ -253,7 +253,7 @@ bool ApplicationCore::sendReadAndWait(const protocol::ModbusRequest& command, js
 
     std::unique_lock<std::mutex> lock(pendingReadsMutex_);
     const auto ready = pendingReadsCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]() {
-        return completedReads_.find(token) != completedReads_.end();
+        return completedReads_.find(token) != completedReads_.end() || failedReads_.find(token) != failedReads_.end();
     });
 
     if (!ready) {
@@ -264,7 +264,15 @@ bool ApplicationCore::sendReadAndWait(const protocol::ModbusRequest& command, js
         }
 
         completedReads_.erase(token);
+        failedReads_.erase(token);
         error = "Timeout waiting for Modbus read response";
+        return false;
+    }
+
+    if (const auto failIt = failedReads_.find(token); failIt != failedReads_.end()) {
+        error = failIt->second;
+        failedReads_.erase(failIt);
+        completedReads_.erase(token);
         return false;
     }
 
@@ -286,6 +294,8 @@ void ApplicationCore::onTransportFrame(const std::vector<std::uint8_t>& frame, c
             const auto& obj = response.as_object();
             if (obj.contains("result") && obj.at("result").is_object()) {
                 handleReadResponse(obj);
+            } else if (obj.contains("error") && obj.at("error").is_object()) {
+                handleReadError(obj);
             }
         }
         emitJson(response);
@@ -321,6 +331,30 @@ void ApplicationCore::handleReadResponse(const json::object& responseObject) {
         enriched["values"] = result.contains("values") ? result.at("values") : json::array{};
 
         completedReads_[pending.token] = std::move(enriched);
+    }
+
+    pendingReadsCv_.notify_all();
+}
+
+void ApplicationCore::handleReadError(const json::object& responseObject) {
+    if (!responseObject.contains("error") || !responseObject.at("error").is_object()) {
+        return;
+    }
+
+    std::string message = "Modbus read error";
+    const auto& err = responseObject.at("error").as_object();
+    if (err.contains("message") && err.at("message").is_string()) {
+        message = std::string(err.at("message").as_string().c_str());
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(pendingReadsMutex_);
+        if (pendingReads_.empty()) {
+            return;
+        }
+        const auto pending = pendingReads_.front();
+        pendingReads_.pop_front();
+        failedReads_[pending.token] = message;
     }
 
     pendingReadsCv_.notify_all();
