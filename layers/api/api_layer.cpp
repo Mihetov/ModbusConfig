@@ -3,11 +3,9 @@
 #include <boost/beast/version.hpp>
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cctype>
 #include <cstring>
-#include <ctime>
 #include <sstream>
 
 namespace api {
@@ -193,7 +191,7 @@ json::value decodeRegisters(const json::array& values, const std::string& dataTy
         if (zeroPos != std::string::npos) {
             out.resize(zeroPos);
         }
-        return out;
+        return json::value(out);
     }
 
     if (dataType == "Array") {
