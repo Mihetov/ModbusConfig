@@ -1,5 +1,6 @@
 #include "application_layer.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <chrono>
 #include <utility>
@@ -242,8 +243,10 @@ bool ApplicationCore::sendReadAndWait(const protocol::ModbusRequest& command, js
 
     if (!sendCommand(command, error)) {
         std::lock_guard<std::mutex> lock(pendingReadsMutex_);
-        if (!pendingReads_.empty() && pendingReads_.back().token == token) {
-            pendingReads_.pop_back();
+        const auto it = std::find_if(pendingReads_.begin(), pendingReads_.end(),
+                                     [&](const PendingReadContext& ctx) { return ctx.token == token; });
+        if (it != pendingReads_.end()) {
+            pendingReads_.erase(it);
         }
         return false;
     }
@@ -254,6 +257,13 @@ bool ApplicationCore::sendReadAndWait(const protocol::ModbusRequest& command, js
     });
 
     if (!ready) {
+        const auto pendingIt = std::find_if(pendingReads_.begin(), pendingReads_.end(),
+                                            [&](const PendingReadContext& ctx) { return ctx.token == token; });
+        if (pendingIt != pendingReads_.end()) {
+            pendingReads_.erase(pendingIt);
+        }
+
+        completedReads_.erase(token);
         error = "Timeout waiting for Modbus read response";
         return false;
     }
