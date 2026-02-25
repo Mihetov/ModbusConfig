@@ -16,7 +16,7 @@ namespace {
 struct StartupOptions {
     std::string mode = "api";                 // api | headless
     std::string bindAddress = "0.0.0.0";
-    std::uint16_t apiPort = 8080;
+    std::uint16_t apiPort = 8001;
 
     std::string startupTransport = "none";    // none | tcp | rtu
     std::string tcpHost = "127.0.0.1";

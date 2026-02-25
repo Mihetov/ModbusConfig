@@ -65,7 +65,18 @@ add_executable(${PROJECT_NAME}
     layers/transport/transport_layer.cpp
     layers/transport/transport_layer.h
 )
-
+if(MSVC)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        LINK_FLAGS "/MANIFEST:NO"
+    )
+endif()
+if(WIN32)
+    target_sources(${PROJECT_NAME} PRIVATE resources.rc)
+    # Указываем, где лежат файлы для ресурсов (иконка, манифест)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/resources.rc"
+    )
+endif()
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/MB/include

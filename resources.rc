@@ -1,0 +1,37 @@
+#include <windows.h>
+
+// Иконка приложения
+IDI_MAIN_ICON ICON "resources/app_icon.ico"
+
+// Версия и информация о продукте
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,1
+PRODUCTVERSION  1,0,0,1
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0" // English (US), Unicode
+        BEGIN
+            VALUE "CompanyName",      "Mihetov"
+            VALUE "FileDescription",  "ModbusBackend"
+            VALUE "FileVersion",      "1.0.0.1"
+            VALUE "InternalName",     "ModbusBackend"
+            VALUE "LegalCopyright",   "© 2026"
+            VALUE "OriginalFilename", "ModbusBackend.exe"
+            VALUE "ProductName",      "ModbusBackend"
+            VALUE "ProductVersion",   "1.0.0.1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+// Манифест (для правильной работы под современными Windows)
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
