@@ -1,0 +1,15 @@
+{
+    "cmake.configureArgs": [
+        "-DBoost_NO_BOOST_CMAKE=ON",
+        "-DBoost_DEBUG=ON",
+        "-DBoost_USE_STATIC_LIBS=OFF",
+        "-DBoost_USE_MULTITHREADED=ON",
+        "-DBoost_ARCHITECTURE=-x64",
+        "-DBOOST_ROOT=C:/local/boost_1_90_0",
+        "-DBOOST_LIBRARYDIR=C:/local/boost_1_90_0/lib64-msvc-14.3",
+        "-DCMAKE_PREFIX_PATH=C:/local/boost_1_90_0"
+    ],
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.generator": "Visual Studio 17 2022",
+    "cmake.platform": "x64"
+}

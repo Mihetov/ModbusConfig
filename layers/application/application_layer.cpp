@@ -124,10 +124,18 @@ TransportConfig ApplicationCore::transportStatus() const {
 std::vector<std::string> ApplicationCore::listSerialPorts() const {
     std::vector<std::string> ports;
 #ifdef _WIN32
+    char targetPath[1024] = {0}; // было 16
     for (int i = 1; i <= 256; ++i) {
         const std::string name = "COM" + std::to_string(i);
-        char targetPath[16] = {0};
-        if (QueryDosDeviceA(name.c_str(), targetPath, static_cast<DWORD>(sizeof(targetPath))) != 0) {
+        DWORD len = QueryDosDeviceA(name.c_str(), targetPath, sizeof(targetPath));
+        if (len == 0) {
+            DWORD err = GetLastError();
+            if (err == ERROR_INSUFFICIENT_BUFFER) {
+                // Слишком маленький буфер — теоретически не должно случиться с 1024
+                continue;
+            }
+            // Другая ошибка — порт не существует
+        } else {
             ports.push_back(name);
         }
     }
