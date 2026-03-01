@@ -11,5 +11,26 @@
     ],
     "cmake.buildDirectory": "${workspaceFolder}/build",
     "cmake.generator": "Visual Studio 17 2022",
-    "cmake.platform": "x64"
+    "cmake.platform": "x64",
+    "cmake.buildVariants": [
+        {
+            "name": "debug",
+            "displayName": "Debug",
+            "description": "Debug build with symbols",
+            "buildType": "Debug"
+        },
+        {
+            "name": "release",
+            "displayName": "Release",
+            "description": "Optimized release build",
+            "buildType": "Release"
+        },
+        {
+            "name": "relwithdebinfo",
+            "displayName": "RelWithDebInfo",
+            "description": "Release with debug info",
+            "buildType": "RelWithDebInfo"
+        }
+    ],
+    "cmake.configureOnOpen": true
 }

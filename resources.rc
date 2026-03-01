@@ -34,4 +34,4 @@ BEGIN
 END
 
 // Манифест (для правильной работы под современными Windows)
-CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+//CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
