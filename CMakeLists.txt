@@ -4,50 +4,101 @@ project(ModbusConfig VERSION 1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Опция для XP
+option(WINXP "Build for Windows XP" OFF)
+
+# Определяем архитектуру из переменной окружения или автоматически
+if(DEFINED ENV{ARCH})
+    set(ARCH "$ENV{ARCH}")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(ARCH "x64")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    set(ARCH "x86")
+else()
+    set(ARCH "x64")  # По умолчанию x64
+endif()
+
+message(STATUS "Building for architecture: ${ARCH}")
+
+# Устанавливаем правильные имена для платформы
+if(ARCH STREQUAL "x86")
+    set(PLATFORM_NAME "Win32")
+    set(BOOST_ARCH_SUFFIX "32")
+    set(BOOST_ARCH_PARAM "-x32")  # ВАЖНО: для вашего Boost нужно -x32, не -x86
+elseif(ARCH STREQUAL "x64")
+    set(PLATFORM_NAME "x64")
+    set(BOOST_ARCH_SUFFIX "64")
+    set(BOOST_ARCH_PARAM "-x64")
+else()
+    message(FATAL_ERROR "Unsupported architecture: ${ARCH}")
+endif()
+
+
 # Платформозависимые настройки
 if(WIN32)
     # Явно указываем статическую линковку с CRT
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     
-    # Альтернативный способ для старых версий CMake:
-    # add_compile_options($<$<CONFIG:Release>:/MT> $<$<CONFIG:Debug>:/MTd>)
+    if(WINXP)
+        # Настройки для Windows XP (0x0501)
+        set(WINVER_VALUE 0x0501)
+        set(MSG "Windows XP (${ARCH})")
+    else()
+        # Настройки для Windows 7 (0x0601)
+        set(WINVER_VALUE 0x0601)
+        set(MSG "Windows 7+ (${ARCH})")
+    endif()
     
-    # 0x0601 = Windows 7
-    add_definitions(-D_WIN32_WINNT=0x0601)
-    add_definitions(-DWINVER=0x0601)
-    add_definitions(-DNTDDI_VERSION=0x06010000)
+    add_definitions(-D_WIN32_WINNT=${WINVER_VALUE})
+    add_definitions(-DWINVER=${WINVER_VALUE})
+    add_definitions(-DNTDDI_VERSION=${WINVER_VALUE}0000)
     add_definitions(-DWIN32_LEAN_AND_MEAN)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS)
     add_definitions(-D_SCL_SECURE_NO_WARNINGS)
 
-    # Настройки Boost - ВСЁ СТАТИЧЕСКИ
+    # Настройки Boost
     if(NOT BOOST_ROOT)
-        set(BOOST_ROOT "C:/local/boost_1_90_0" CACHE PATH "Boost root directory")
+        if(WINXP)
+            set(BOOST_ROOT "C:/local/boost_1_73_0" CACHE PATH "Boost root directory (XP)")
+        else()
+            set(BOOST_ROOT "C:/local/boost_1_90_0" CACHE PATH "Boost root directory")
+        endif()
     endif()
     
     if(MSVC)
         set(Boost_USE_STATIC_LIBS ON)      
         set(Boost_USE_STATIC_RUNTIME ON)   
         set(Boost_USE_MULTITHREADED ON)
-        set(Boost_ARCHITECTURE "-x64")
-        set(Boost_COMPILER "-vc143")
+        set(Boost_NO_BOOST_CMAKE ON)
+        set(Boost_NO_SYSTEM_PATHS ON)
         
-        # Убираем любые намёки на динамическую линковку
-        # НЕ определяем BOOST_ALL_DYN_LINK и подобные
+        if(WINXP)
+            # Для XP с Boost 1.73 используем vc120 (VS 2013)
+            set(Boost_COMPILER "-vc120")
+            # Библиотеки в lib32-msvc-12.0 (не stage/lib)
+            set(BOOST_LIBRARYDIR "${BOOST_ROOT}/lib32-msvc-12.0" CACHE PATH "Boost library directory (XP)")
+        else()
+            # Для Win7 используем vc143 (VS 2022)
+            set(Boost_COMPILER "-vc143")
+            set(BOOST_LIBRARYDIR "${BOOST_ROOT}/lib${BOOST_ARCH_SUFFIX}-msvc-14.3" CACHE PATH "Boost library directory")
+        endif()
+        
+        # Устанавливаем архитектуру для Boost
+        set(Boost_ARCHITECTURE "${BOOST_ARCH_PARAM}")
     endif()
-
-    set(Boost_NO_BOOST_CMAKE ON)
-    set(Boost_NO_SYSTEM_PATHS ON)
-    
-    # Указываем директорию с библиотеками (статические .lib)
-    set(BOOST_LIBRARYDIR "${BOOST_ROOT}/lib64-msvc-14.3" CACHE PATH "Boost library directory")
 else()
     set(Boost_USE_STATIC_LIBS ON)
     set(Boost_USE_MULTITHREADED ON)
 endif()
 
 # Поиск Boost
-find_package(Boost 1.75.0 REQUIRED COMPONENTS json)
+if(WINXP)
+    # Для XP используем Boost 1.73
+    find_package(Boost 1.73.0 REQUIRED COMPONENTS json system)
+else()
+    # Для Win7 используем Boost 1.75+
+    find_package(Boost 1.75.0 REQUIRED COMPONENTS json)
+endif()
 
 # Alias для Boost::system
 if(NOT TARGET Boost::system)
@@ -78,7 +129,7 @@ add_executable(${PROJECT_NAME}
     layers/transport/transport_layer.h
 )
 
-# Явно указываем версии Windows API
+# Явно указываем версии Windows API для таргета
 if(MSVC)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         VS_GLOBAL_Manifest "true"
@@ -86,12 +137,12 @@ if(MSVC)
     )
     
     target_compile_definitions(${PROJECT_NAME} PRIVATE
-        _WIN32_WINNT=0x0601
-        WINVER=0x0601
-        NTDDI_VERSION=0x06010000
+        _WIN32_WINNT=${WINVER_VALUE}
+        WINVER=${WINVER_VALUE}
+        NTDDI_VERSION=${WINVER_VALUE}0000
         WIN32_LEAN_AND_MEAN
         _CRT_SECURE_NO_WARNINGS
-        BOOST_USE_WINAPI_VERSION=0x0601
+        BOOST_USE_WINAPI_VERSION=${WINVER_VALUE}
     )
 endif()
 
@@ -108,7 +159,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${Boost_INCLUDE_DIRS}
 )
 
-# Линковка - ТОЛЬКО СТАТИЧЕСКИЕ БИБЛИОТЕКИ
+# Линковка
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Boost::json
     Boost::system
@@ -120,22 +171,26 @@ if(WIN32)
         ws2_32
         iphlpapi
         advapi32
-        # Явно указываем статические runtime библиотеки (на всякий случай)
-        # Обычно CMake добавляет их автоматически при /MT
     )
 
-    # Вывод exe в папку bin
+    # Вывод exe в папку bin с учётом архитектуры
     set_target_properties(${PROJECT_NAME} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin"
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin"
-        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/bin"
-        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/bin"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${ARCH}"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin/${ARCH}"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin/${ARCH}"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/bin/${ARCH}"
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/bin/${ARCH}"
     )
 endif()
 
 message(STATUS "Project configured successfully")
+message(STATUS "  Architecture: ${ARCH}")
+message(STATUS "  Platform: ${PLATFORM_NAME}")
 message(STATUS "  Boost version: ${Boost_VERSION}")
+message(STATUS "  Boost library dir: ${BOOST_LIBRARYDIR}")
+message(STATUS "  Boost compiler: ${Boost_COMPILER}")
+message(STATUS "  Boost architecture: ${Boost_ARCHITECTURE}")
 message(STATUS "  C++ standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "  Target Windows: 7+")
+message(STATUS "  Target Windows: ${MSG}")
 message(STATUS "  Runtime: Static (/MT)")
+message(STATUS "  WINXP option: ${WINXP}")

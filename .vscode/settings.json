@@ -2,35 +2,32 @@
     "cmake.configureArgs": [
         "-DBoost_NO_BOOST_CMAKE=ON",
         "-DBoost_DEBUG=ON",
-        "-DBoost_USE_STATIC_LIBS=OFF",
+        "-DBoost_USE_STATIC_LIBS=ON",
+        "-DBoost_USE_STATIC_RUNTIME=ON",
         "-DBoost_USE_MULTITHREADED=ON",
-        "-DBoost_ARCHITECTURE=-x64",
-        "-DBOOST_ROOT=C:/local/boost_1_90_0",
-        "-DBOOST_LIBRARYDIR=C:/local/boost_1_90_0/lib64-msvc-14.3",
-        "-DCMAKE_PREFIX_PATH=C:/local/boost_1_90_0"
+        "-DBOOST_ROOT=C:/local/boost_1_73_0",
+        "-DWINXP=ON",
+        "-DCMAKE_SYSTEM_VERSION=5.1",
+        "-DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=8.1",
+        "-D_WIN32_WINNT=0x0501"
     ],
-    "cmake.buildDirectory": "${workspaceFolder}/build",
-    "cmake.generator": "Visual Studio 17 2022",
-    "cmake.platform": "x64",
+    "cmake.buildDirectory": "${workspaceFolder}/build_xp",
+    "cmake.generator": "Visual Studio 16 2019",
     "cmake.buildVariants": [
         {
-            "name": "debug",
-            "displayName": "Debug",
-            "description": "Debug build with symbols",
-            "buildType": "Debug"
-        },
-        {
-            "name": "release",
-            "displayName": "Release",
-            "description": "Optimized release build",
-            "buildType": "Release"
-        },
-        {
-            "name": "relwithdebinfo",
-            "displayName": "RelWithDebInfo",
-            "description": "Release with debug info",
-            "buildType": "RelWithDebInfo"
+            "name": "XP 32-bit Release",
+            "description": "Windows XP 32-bit release build (Boost 1.73, VS2013)",
+            "buildType": "Release",
+            "settings": {
+                "cmake.buildDirectory": "${workspaceFolder}/build_xp_x86",
+                "cmake.platform": "Win32",  // <- ВАЖНО: Win32, не x64
+                "cmake.configureArgs": [
+                    "-DBoost_ARCHITECTURE=-x32",  // <- для ваших файлов
+                    "-DBoost_COMPILER=-vc120",
+                    "-DBOOST_LIBRARYDIR=C:/local/boost_1_73_0/lib32-msvc-12.0"
+                ]
+            }
         }
     ],
-    "cmake.configureOnOpen": true
+    "cmake.configureOnOpen": false
 }
