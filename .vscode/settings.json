@@ -5,11 +5,17 @@
         "-DBoost_USE_STATIC_LIBS=OFF",
         "-DBoost_USE_MULTITHREADED=ON",
         "-DBoost_ARCHITECTURE=-x64",
+        "-DBoost_COMPILER=-vc143",
         "-DBOOST_ROOT=C:/local/boost_1_90_0",
         "-DBOOST_LIBRARYDIR=C:/local/boost_1_90_0/lib64-msvc-14.3",
         "-DCMAKE_PREFIX_PATH=C:/local/boost_1_90_0"
     ],
     "cmake.buildDirectory": "${workspaceFolder}/build",
     "cmake.generator": "Visual Studio 17 2022",
-    "cmake.platform": "x64"
+    "cmake.platform": "x64",
+    "cmake.toolset": "v143",
+    "cmake.preferredGenerators": ["Visual Studio 17 2022"],
+    "cmake.environment": {
+        "PATH": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/19.36.0/bin/Hostx64/x64;C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64;${env:PATH}"
+    }
 }

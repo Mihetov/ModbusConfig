@@ -1,12 +1,9 @@
 #include <windows.h>
 
-// Иконка приложения
-IDI_MAIN_ICON ICON "resources/app_icon.ico"
-
-// Версия и информация о продукте
+// Идентификатор версии
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,0,1
-PRODUCTVERSION  1,0,0,1
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -15,16 +12,16 @@ FILESUBTYPE     0x0L
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
-        BLOCK "040904B0" // English (US), Unicode
+        BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName",      "Mihetov"
-            VALUE "FileDescription",  "ModbusBackend"
-            VALUE "FileVersion",      "1.0.0.1"
-            VALUE "InternalName",     "ModbusBackend"
-            VALUE "LegalCopyright",   "© 2026"
-            VALUE "OriginalFilename", "ModbusBackend.exe"
-            VALUE "ProductName",      "ModbusBackend"
-            VALUE "ProductVersion",   "1.0.0.1"
+            VALUE "CompanyName", "Your Company"
+            VALUE "FileDescription", "Modbus Configuration Tool"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "ModbusConfig"
+            VALUE "LegalCopyright", "Copyright (C) 2025"
+            VALUE "OriginalFilename", "ModbusConfig.exe"
+            VALUE "ProductName", "ModbusConfig"
+            VALUE "ProductVersion", "1.0.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -33,5 +30,6 @@ BEGIN
     END
 END
 
-// Манифест (для правильной работы под современными Windows)
-CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+// Манифест для Windows 7
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "modbusconfig.exe.manifest"
+IDI_ICON1 ICON "app_icon.ico"
