@@ -72,6 +72,7 @@ private:
 
     void onTransportFrame(const std::vector<std::uint8_t>& frame, const transport::SessionPtr& session);
     void handleReadResponse(const boost::json::object& responseObject);
+    void handleReadError(const boost::json::object& responseObject);
     void emitJson(const boost::json::value& value) const;
 
     transport::TransportManager& transportManager_;
@@ -88,6 +89,7 @@ private:
     std::condition_variable pendingReadsCv_;
     std::deque<PendingReadContext> pendingReads_;
     std::unordered_map<std::uint64_t, boost::json::object> completedReads_;
+    std::unordered_map<std::uint64_t, std::string> failedReads_;
 };
 
 } // namespace application
